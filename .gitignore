@@ -1,0 +1,33 @@
+# Compiled binaries and executables
+*.exe
+*.exe.manifest
+*.exe.config
+cicd.exe
+bin/
+obj/
+
+# Local runtime directories & build storage
+.workspaces/
+.deployments/
+.storage/
+
+# Environment files and local configs
+*.env
+*.env.local
+*.json
+!go.mod
+!go.sum
+
+# Temporary / Local YAML pipeline test files
+*.yaml
+*.yml
+!configs/*.yaml
+!configs/*.yml
+
+# IDE & System files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
