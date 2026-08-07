@@ -223,6 +223,10 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 		WorkspaceRetained: !shouldCleanup,
 	}
 
+	if e.buildStore != nil {
+		_ = e.buildStore.Save(job)
+	}
+
 	pCtx := pipeline.NewPipelineContext(ctx, req.RepositoryURL, cfg.Username, req.Password)
 	pCtx.KeepWorkspace = !shouldCleanup
 	pCtx.Revision = rev
@@ -243,6 +247,7 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 	// 1. Environment Validation
 	fmt.Fprintln(e.out, "Checking environment...")
 	fmt.Fprintln(e.out, "")
+	e.emitLog(job.ID, "Environment Validation", "", "INFO", "Checking environment tools (svn, node, npm, dotnet)...")
 
 	startStage := time.Now()
 	envVal := e.envValidator
@@ -259,13 +264,16 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 	for _, toolKey := range []string{"svn", "node", "npm", "dotnet"} {
 		if tInfo, ok := envInfo.Tools[toolKey]; ok && tInfo.Installed {
 			fmt.Fprintf(e.out, "✓ %s %s\n\n", tInfo.Name, tInfo.Version)
+			e.emitLog(job.ID, "Environment Validation", "", "INFO", fmt.Sprintf("✓ Found %s (%s)", tInfo.Name, tInfo.Version))
 		} else if tInfo, ok := envInfo.Tools[toolKey]; ok {
 			fmt.Fprintf(e.out, "✗ %s (not available: %s)\n\n", tInfo.Name, tInfo.ErrorMessage)
+			e.emitLog(job.ID, "Environment Validation", "", "WARN", fmt.Sprintf("✗ Tool %s unavailable: %s", tInfo.Name, tInfo.ErrorMessage))
 		}
 	}
 
 	// 2. Workspace Creation
 	fmt.Fprintln(e.out, "Creating workspace...")
+	e.emitLog(job.ID, "Workspace Creation", "", "INFO", "Creating isolated build workspace...")
 	startStage = time.Now()
 	wsMgr, err := workspace.NewManager(cfg.WorkspaceRoot, !shouldCleanup, log)
 	if err != nil {
@@ -280,8 +288,35 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 	job.Workspace = ws.Path
 	job.Status = models.JobStatusRunning
 	_ = e.buildStore.Save(job)
+	e.emitLog(job.ID, "Workspace Creation", "", "INFO", fmt.Sprintf("Created isolated workspace at %s", ws.Path))
+
+	wsSanitizer := e.sanitizer
+	if wsSanitizer == nil {
+		var customRules []sanitizer.Rule
+		if len(cfg.Cleanup.Rules) > 0 {
+			for _, r := range cfg.Cleanup.Rules {
+				customRules = append(customRules, sanitizer.Rule{
+					Name:    r,
+					Pattern: r,
+					Type:    sanitizer.TypeAny,
+				})
+			}
+		}
+		wsSanitizer = sanitizer.NewSanitizer(customRules, log)
+	}
 
 	defer func() {
+		// Clean up node_modules and temporary build artifacts post-build (whether success or failure)
+		if wsSanitizer != nil && ws != nil && ws.Path != "" {
+			fmt.Fprintln(e.out, "\nCleaning node_modules & temporary build artifacts...")
+			sanRes, sanErr := wsSanitizer.Sanitize(context.Background(), ws.Path)
+			if sanErr == nil && sanRes != nil {
+				for _, dir := range sanRes.DirectoriesRemoved {
+					fmt.Fprintf(e.out, "✓ Cleaned %s/\n", strings.ReplaceAll(dir, "\\", "/"))
+				}
+			}
+		}
+
 		if shouldCleanup {
 			fmt.Fprintln(e.out, "\nCleaning up workspace...")
 			if err := wsMgr.Cleanup(ws); err != nil {
@@ -293,7 +328,7 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 		} else {
 			divider := strings.Repeat("━", 50)
 			fmt.Fprintln(e.out, "\n"+divider)
-			fmt.Fprintln(e.out, "Workspace Retained")
+			fmt.Fprintln(e.out, "Workspace Retained (Cleaned node_modules & Build Cache)")
 			fmt.Fprintln(e.out, divider)
 			fmt.Fprintln(e.out, "Location")
 			fmt.Fprintln(e.out, ws.Path)
@@ -402,21 +437,6 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 		if pipelineConfig == nil {
 			fmt.Fprintln(e.out, "No cicd.yaml found. Using auto-scan mode.")
 		}
-	}
-
-	wsSanitizer := e.sanitizer
-	if wsSanitizer == nil {
-		var customRules []sanitizer.Rule
-		if len(cfg.Cleanup.Rules) > 0 {
-			for _, r := range cfg.Cleanup.Rules {
-				customRules = append(customRules, sanitizer.Rule{
-					Name:    r,
-					Pattern: r,
-					Type:    sanitizer.TypeAny,
-				})
-			}
-		}
-		wsSanitizer = sanitizer.NewSanitizer(customRules, log)
 	}
 
 	// 3.5 Workspace Sanitization
@@ -589,7 +609,9 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 			continue
 		}
 
-		bRes, buildErr := bld.Build(ctx, project, bRep)
+		streamListener := &logStoreEventListener{engine: e, jobID: job.ID}
+		compListener := &compositeEventListener{listeners: []builder.EventListener{bRep, streamListener}}
+		bRes, buildErr := bld.Build(ctx, project, compListener)
 
 		for _, step := range bRes.Steps {
 			_ = e.logStore.Append(job.ID, logs.LogEntry{
@@ -748,6 +770,7 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 
 	_ = e.buildStore.Save(job)
 	_ = manifest.Generate(ws.Path, job)
+	e.emitLog(job.ID, "End Event", "", "INFO", fmt.Sprintf("Pipeline build execution completed with status: %s", job.Status))
 
 	bRep.ReportSummary(job)
 
@@ -788,4 +811,42 @@ func (e *Engine) GetHistory() ([]models.Job, error) {
 // GetStatus retrieves all queued or active jobs.
 func (e *Engine) GetStatus() ([]models.Job, error) {
 	return e.jobQueue.List(), nil
+}
+
+func (e *Engine) emitLog(jobID, step, project, level, message string) {
+	if e.logStore != nil && jobID != "" {
+		_ = e.logStore.Append(jobID, logs.LogEntry{
+			Time:    time.Now(),
+			JobID:   jobID,
+			Step:    step,
+			Project: project,
+			Level:   level,
+			Message: message,
+		})
+	}
+}
+
+type logStoreEventListener struct {
+	engine *Engine
+	jobID  string
+}
+
+func (l *logStoreEventListener) OnBuildEvent(event builder.BuildEvent) {
+	level := event.Level
+	if level == "" {
+		level = "INFO"
+	}
+	l.engine.emitLog(l.jobID, event.Step, event.Project, level, event.Message)
+}
+
+type compositeEventListener struct {
+	listeners []builder.EventListener
+}
+
+func (c *compositeEventListener) OnBuildEvent(event builder.BuildEvent) {
+	for _, l := range c.listeners {
+		if l != nil {
+			l.OnBuildEvent(event)
+		}
+	}
 }

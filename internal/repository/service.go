@@ -109,7 +109,13 @@ func (s *SVNService) doCheckout(ctx context.Context, repoURL, targetDir, revisio
 
 	res, err := s.runner.Run(ctx, opts)
 	if err != nil || !res.Successful {
-		errMsg := res.ErrorMessage
+		errMsg := strings.TrimSpace(res.StdErr)
+		if errMsg == "" {
+			errMsg = strings.TrimSpace(res.StdOut)
+		}
+		if errMsg == "" {
+			errMsg = res.ErrorMessage
+		}
 		if errMsg == "" && err != nil {
 			errMsg = err.Error()
 		}
@@ -136,7 +142,13 @@ func (s *SVNService) doUpdate(ctx context.Context, targetDir, revision string, c
 
 	res, err := s.runner.Run(ctx, opts)
 	if err != nil || !res.Successful {
-		errMsg := res.ErrorMessage
+		errMsg := strings.TrimSpace(res.StdErr)
+		if errMsg == "" {
+			errMsg = strings.TrimSpace(res.StdOut)
+		}
+		if errMsg == "" {
+			errMsg = res.ErrorMessage
+		}
 		if errMsg == "" && err != nil {
 			errMsg = err.Error()
 		}

@@ -15,13 +15,14 @@ import (
 
 // RunRequest encapsulates CLI parameters passed to the engine.
 type RunRequest struct {
-	PipelineFile  string `json:"pipeline_file"`
-	RepositoryURL string `json:"repository_url"`
-	Username      string `json:"username"`
-	Password      string `json:"password"`
-	ConfigPath    string `json:"config_path"`
-	KeepWorkspace bool   `json:"keep_workspace"`
-	Revision      string `json:"revision"`
+	PipelineFile    string `json:"pipeline_file"`
+	PipelineContent string `json:"pipeline_content,omitempty"`
+	RepositoryURL   string `json:"repository_url"`
+	Username        string `json:"username"`
+	Password        string `json:"password"`
+	ConfigPath      string `json:"config_path"`
+	KeepWorkspace   bool   `json:"keep_workspace"`
+	Revision        string `json:"revision"`
 }
 
 // Engine defines the pipeline execution entry point interface.
@@ -52,11 +53,15 @@ func (s *StubEngine) GetStatus() ([]models.Job, error) {
 	return []models.Job{}, nil
 }
 
+// ServerRunner defines function signature for starting the web dashboard HTTP server.
+type ServerRunner func(ctx context.Context, addr string) error
+
 // App encapsulates CLI setup, argument parsing, and engine invocation.
 type App struct {
-	Out    io.Writer
-	Err    io.Writer
-	Engine Engine
+	Out          io.Writer
+	Err          io.Writer
+	Engine       Engine
+	ServerRunner ServerRunner
 }
 
 // NewApp creates a new CLI App instance with standard IO writers and engine.
@@ -88,6 +93,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	switch command {
 	case "run":
 		return a.handleRun(ctx, args[1:])
+	case "server", "serve":
+		return a.handleServer(ctx, args[1:])
 	case "history":
 		return a.handleHistory()
 	case "status":
@@ -156,6 +163,30 @@ func (a *App) handleRun(ctx context.Context, args []string) error {
 	}
 
 	return a.Engine.Run(ctx, req)
+}
+
+func (a *App) handleServer(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("server", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+
+	var port int
+	var host string
+
+	fs.IntVar(&port, "port", 8080, "HTTP dashboard listening port")
+	fs.StringVar(&host, "host", "0.0.0.0", "HTTP dashboard listening host")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	addr := fmt.Sprintf("%s:%d", host, port)
+	fmt.Fprintf(a.Out, "Starting CI/CD Dashboard HTTP Server on http://%s\n", addr)
+
+	if a.ServerRunner != nil {
+		return a.ServerRunner(ctx, addr)
+	}
+
+	return nil
 }
 
 func fileExists(path string) bool {
@@ -237,6 +268,7 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.Out, "CI/CD Engine MVP CLI")
 	fmt.Fprintln(a.Out, "Usage:")
 	fmt.Fprintln(a.Out, "  cicd run <cicd.yaml|svn-url> [flags]")
+	fmt.Fprintln(a.Out, "  cicd server [--port 8080] [--host 0.0.0.0]")
 	fmt.Fprintln(a.Out, "  cicd history")
 	fmt.Fprintln(a.Out, "  cicd status")
 	fmt.Fprintln(a.Out, "  cicd doctor")

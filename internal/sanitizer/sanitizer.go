@@ -167,9 +167,18 @@ func (s *DefaultSanitizer) Sanitize(ctx context.Context, workspace string) (*Res
 			if d.IsDir() && (rule.Type == TypeDirectory || rule.Type == TypeAny) {
 				size := calculateDirSize(path)
 				s.logger.Info("removing generated directory", "path", rel)
+				// Chmod all files inside writable to ensure clean removal on Windows
+				_ = filepath.WalkDir(path, func(p string, _ os.DirEntry, wErr error) error {
+					if wErr == nil {
+						_ = os.Chmod(p, 0777)
+					}
+					return nil
+				})
 				if removeErr := os.RemoveAll(path); removeErr == nil {
 					res.DirectoriesRemoved = append(res.DirectoriesRemoved, rel)
 					res.BytesFreed += size
+				} else {
+					s.logger.Warn("failed to remove directory", "path", rel, "err", removeErr)
 				}
 				return filepath.SkipDir
 			} else if !d.IsDir() && (rule.Type == TypeFile || rule.Type == TypeAny) {

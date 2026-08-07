@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+:root, html.dark, body.dark {
+  --bg-main: #000000;
+  --bg-card: #09090b;
+  --bg-input: #000000;
+  --bg-hover: #18181b;
+  --text-primary: #ffffff;
+  --text-secondary: #e4e4e7;
+  --text-muted: #a1a1aa;
+  --border-color: #27272a;
+  --badge-bg: #ffffff;
+  --badge-text: #000000;
+  --table-header: #000000;
+  --table-hover: #18181b;
+}
+
+html.light, body.light {
+  --bg-main: #ffffff;
+  --bg-card: #f4f4f5;
+  --bg-input: #ffffff;
+  --bg-hover: #e4e4e7;
+  --text-primary: #09090b;
+  --text-secondary: #27272a;
+  --text-muted: #71717a;
+  --border-color: #e4e4e7;
+  --badge-bg: #09090b;
+  --badge-text: #ffffff;
+  --table-header: #f4f4f5;
+  --table-hover: #f4f4f5;
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Custom Semantic Theme Utilities */
+.app-bg-main { background-color: var(--bg-main); }
+.app-bg-card { background-color: var(--bg-card); }
+.app-bg-input { background-color: var(--bg-input); }
+.app-bg-hover:hover { background-color: var(--bg-hover); }
+.app-text-primary { color: var(--text-primary); }
+.app-text-secondary { color: var(--text-secondary); }
+.app-text-muted { color: var(--text-muted); }
+.app-border { border-color: var(--border-color); }
+.app-badge { background-color: var(--badge-bg); color: var(--badge-text); }
+.app-table-header { background-color: var(--table-header); }
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+html.dark ::-webkit-scrollbar-track, body.dark ::-webkit-scrollbar-track {
+  background: #000000;
+}
+html.dark ::-webkit-scrollbar-thumb, body.dark ::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 3px;
+}
+html.light ::-webkit-scrollbar-track, body.light ::-webkit-scrollbar-track {
+  background: #ffffff;
+}
+html.light ::-webkit-scrollbar-thumb, body.light ::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 3px;
+}
+
+@keyframes pulse-monochrome {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-pulse-monochrome {
+  animation: pulse-monochrome 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
