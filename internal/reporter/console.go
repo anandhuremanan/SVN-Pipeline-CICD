@@ -145,6 +145,12 @@ func (r *ConsoleReporter) OnBuildEvent(event builder.BuildEvent) {
 			}
 		}(t, r.out, isTTY)
 
+	case builder.EventStepOutput, builder.EventStepProgress:
+		// A terminal already shows the spinner line; live output is for logs and the desktop app.
+		if event.Message != "" && !isTerminalWriter(r.out) {
+			fmt.Fprintf(r.out, "  %s\n", event.Message)
+		}
+
 	case builder.EventStepCompleted:
 		r.stopActiveTickerLocked()
 		stepName := event.Step
@@ -225,6 +231,10 @@ func (r *ConsoleReporter) ReportSummary(job models.Job) {
 	fmt.Fprintf(r.out, "Job:        %s\n", job.ID)
 	fmt.Fprintf(r.out, "Repository: %s\n", job.Repository)
 	fmt.Fprintf(r.out, "Revision:   %s\n", job.Revision)
+	if job.BuildNumber > 0 {
+		fmt.Fprintf(r.out, "Build No:   %d\n", job.BuildNumber)
+		fmt.Fprintf(r.out, "Build Dir:  %s\n", job.BuildDir)
+	}
 
 	succeeded := 0
 	failed := 0

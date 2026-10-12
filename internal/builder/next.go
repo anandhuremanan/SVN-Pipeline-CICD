@@ -43,14 +43,7 @@ func (b *NextBuilder) Plan(project models.Project) ([]Step, error) {
 	buildScript := scriptvalidator.ResolveScript(project)
 
 	steps := []Step{
-		{
-			Name: "Install Dependencies",
-			ExecOptions: models.ExecOptions{
-				Command: pkgMgr,
-				Args:    []string{"install"},
-				Dir:     project.RootDir,
-			},
-		},
+		installStep(pkgMgr, project.RootDir),
 		{
 			Name: "Build",
 			ExecOptions: models.ExecOptions{

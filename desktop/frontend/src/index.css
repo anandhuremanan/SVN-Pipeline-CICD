@@ -1,0 +1,195 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --canvas: #f3f4f7;
+  --surface: #ffffff;
+  --field: #ffffff;
+  --line: #e2e5eb;
+  --line-strong: #c9ced8;
+  --ink: #14171d;
+  --muted: #596170;
+  --faint: #8b93a2;
+  --accent: #2f5fe0;
+  --accent-hover: #264fc4;
+  --accent-ink: #ffffff;
+  --accent-soft: #e8eefd;
+  --good: #17804a;
+  --good-soft: #e2f4ea;
+  --bad: #bd3327;
+  --bad-soft: #fbe9e7;
+  --warn: #8a6100;
+  --warn-soft: #fbf1d5;
+  --shadow: 0 1px 2px rgb(16 24 40 / 0.05);
+}
+
+/* Dark applies when Windows is dark and no theme is forced, or when dark is chosen in Settings.
+   The two blocks must stay identical. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --canvas: #0d0f14;
+    --surface: #151821;
+    --field: #1a1e29;
+    --line: #262b37;
+    --line-strong: #394050;
+    --ink: #eceef3;
+    --muted: #969eaf;
+    --faint: #687083;
+    --accent: #7aa2ff;
+    --accent-hover: #93b4ff;
+    --accent-ink: #0a1024;
+    --accent-soft: #1b2743;
+    --good: #45d08f;
+    --good-soft: #12301f;
+    --bad: #ff8a80;
+    --bad-soft: #3a1a18;
+    --warn: #e6b955;
+    --warn-soft: #33290f;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #0d0f14;
+  --surface: #151821;
+  --field: #1a1e29;
+  --line: #262b37;
+  --line-strong: #394050;
+  --ink: #eceef3;
+  --muted: #969eaf;
+  --faint: #687083;
+  --accent: #7aa2ff;
+  --accent-hover: #93b4ff;
+  --accent-ink: #0a1024;
+  --accent-soft: #1b2743;
+  --good: #45d08f;
+  --good-soft: #12301f;
+  --bad: #ff8a80;
+  --bad-soft: #3a1a18;
+  --warn: #e6b955;
+  --warn-soft: #33290f;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-field: var(--field);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --shadow-card: var(--shadow);
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html,
+body {
+  overscroll-behavior: none;
+  overscroll-behavior-x: none;
+  overscroll-behavior-y: none;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  position: fixed;
+  touch-action: pan-x pan-y;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+input,
+pre,
+.selectable {
+  user-select: text;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A text box shows focus with its border colour alone; a second line around it is noise. */
+input:focus,
+input:focus-visible {
+  outline: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Edge draws its own reveal button; the form has one already. */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.view-enter {
+  animation: rise 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-enter {
+    animation: none;
+  }
+
+  * {
+    transition-duration: 0ms !important;
+  }
+}

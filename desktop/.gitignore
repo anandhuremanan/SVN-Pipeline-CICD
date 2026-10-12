@@ -1,0 +1,14 @@
+# The root .gitignore ignores *.json; these are needed to build the app.
+!wails.json
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json
+
+# Wails build output
+build/bin/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/*
+!frontend/dist/.gitkeep
+frontend/package.json.md5

@@ -17,6 +17,10 @@ const (
 	EventProjectCompleted EventType = "PROJECT_COMPLETED"
 	// EventInfo is used for informational messages emitted before step execution.
 	EventInfo EventType = "INFO"
+	// EventStepOutput carries one line printed by the running step.
+	EventStepOutput EventType = "STEP_OUTPUT"
+	// EventStepProgress carries a short summary of how far the running step is, e.g. "Downloaded 312 packages".
+	EventStepProgress EventType = "STEP_PROGRESS"
 )
 
 // BuildEvent represents a real-time progress update emitted during a project build step.

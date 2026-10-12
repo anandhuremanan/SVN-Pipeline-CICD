@@ -13,7 +13,9 @@ A lightweight CI/CD engine for SVN repositories. Automatically detects, builds, 
 5. [Project Types & Builders](#project-types--builders)
 6. [Build Script Override](#build-script-override)
 7. [Deployment Structure](#deployment-structure)
-8. [Examples](#examples)
+8. [Output Folder & Build Numbers](#output-folder--build-numbers)
+9. [Desktop App (SVN Builder)](#desktop-app-svn-builder)
+10. [Examples](#examples)
 
 ---
 
@@ -40,6 +42,15 @@ Triggers a pipeline build. Accepts either a YAML pipeline file or a bare SVN URL
 | `--revision`       | string | `HEAD`  | Target SVN revision to build           |
 | `--config`         | string | —       | Path to a JSON engine config file      |
 | `--keep-workspace` | bool   | `false` | Retain workspace directory after build |
+| `--output`         | string | —       | Folder or network share that receives each build under a unique build number (see [Output Folder & Build Numbers](#output-folder--build-numbers)) |
+| `--workspace`      | string | —       | Directory where the checkout workspace is created |
+| `--clean-workspace`| bool   | `false` | Remove workspace directory after build |
+| `--project`        | string | all     | Comma-separated repository folders to build, e.g. `Client,Api`. Only these folders are downloaded from SVN (see note below) |
+| `--script`         | string | `build` | npm script used to build Node projects that have no `build.script` in YAML |
+| `--reuse-deps`     | bool   | `false` | Keep each Node project's `node_modules` between runs (in `<workspace>\.deps`) so repeat builds skip most of the install |
+| `--clean-deps`     | bool   | `false` | With `--reuse-deps`: discard the kept `node_modules` of this run's projects first and install from scratch |
+
+**Selected folders and download size.** With `--project` (or the desktop app's folder list), the engine downloads only those folders plus the files in the top folder of the address, not the whole tree. The whole tree is still downloaded when a pipeline YAML file is passed on the command line, when the repository has a `cicd.yaml` in its top folder (it may point at other folders), or when a listed name is not a folder in the repository.
 
 **Examples**
 
@@ -58,6 +69,14 @@ Triggers a pipeline build. Accepts either a YAML pipeline file or a bare SVN URL
 
 # Run directly from an SVN URL (no YAML file needed)
 .\cicd.exe run https://svn.example.com/repos/MyProject --username anandhu --password "secret"
+
+# Check out to the temp folder, build, and save the result to a server share under a new build number
+.\cicd.exe run https://svn.example.com/repos/MyProject/trunk --username anandhu --password "secret" `
+  --output \\SERVER\Builds --workspace $env:TEMP\cicd --clean-workspace
+
+# Build only the Client folder, using "npm run build:prod" instead of "npm run build"
+.\cicd.exe run https://svn.example.com/repos/MyProject/trunk --username anandhu --password "secret" `
+  --project Client --script build:prod
 ```
 
 ---
@@ -330,6 +349,62 @@ Published outputs are organized by repository name and project name:
 
 If `output` is specified in the YAML, it is used directly as the destination.
 After publishing, heavy workspace folders (`node_modules`, `dist`, `bin`, `obj`) are automatically cleaned from the workspace to save disk space.
+
+---
+
+## Output Folder & Build Numbers
+
+Pass `--output <folder>` (or use the desktop app) to collect every run in one place, typically a shared folder on a Windows server. The checkout and build still happen on the machine that runs the engine; only the finished output is copied to the folder.
+
+```
+\\SERVER\Builds
+└── MyProject/                 ← application name taken from the SVN URL
+    ├── Build-0001/
+    │   ├── build-info.json    ← build number, SVN revision, who built it, when
+    │   ├── Client/            ← dist/ contents
+    │   └── API/               ← dotnet publish output
+    └── Build-0002/
+        └── ...
+```
+
+- The build number is the next free number in the application's folder. It is reserved by creating the folder, so two people building at the same time never get the same number.
+- A number is only used when the build succeeds. Failed or cancelled builds leave nothing on the share.
+- `--output` overrides the `output` paths in the YAML file and the `deployment.directory` config value.
+- Branches and tags get their own sequence: `.../MyProject/branches/v2` is saved under `MyProject_v2`.
+
+---
+
+## Desktop App (SVN Builder)
+
+A small [Wails](https://wails.io) window in `desktop/` for people who should not need the command line. The user enters the SVN address, their SVN user name and password, and the folder to save to, then presses **Start build**. The **Folders to build** list narrows the build: each row is a folder inside the project plus an optional build script for it (the npm script for website projects, `build` when left empty). **+ Add folder** adds a row, and the folders are built in the order listed. Leaving the list empty builds every project found. **Find folders in SVN** asks the server which folders can be built (using the address, user name and password already typed, without downloading the project) and shows them as buttons that add or remove a folder from the list. It checks out into `%TEMP%\SvnBuilder`, builds, saves to the chosen folder under a new build number, and deletes the temporary checkout.
+
+```powershell
+cd desktop
+
+# Build desktop\build\bin\svn-builder.exe
+wails build
+
+# Run with live reload while developing
+wails dev
+```
+
+The PC running the app needs the same tools as the CLI: `svn` on the PATH, plus `node`/`npm` for web projects and `dotnet` for .NET projects. The app shows a warning on its first screen when one is missing.
+
+If the save folder is a network folder (`\\SERVER\Builds`) that needs a different account from the one logged on to Windows, turn on **This folder needs its own sign-in** and enter that account. The app signs in to the share before the build starts, the same way File Explorer does, and the connection lasts until the user logs off Windows. The app also checks that it can write to the folder before starting, so an access problem shows up immediately and not after a long build. The CLI has no equivalent option; connect the share first with `net use \\SERVER\Builds /user:NAME`.
+
+The last SVN address, user names and folders are remembered in `%APPDATA%\SvnBuilder\settings.json`. Passwords are never stored.
+
+**Settings** (the gear at the top right) has an **Appearance** switch (Same as Windows, Light, Dark) that is remembered between sessions, and a **Working drive** choice for PCs whose system drive is short on space. It lists the internal drives with their free space; choosing one moves downloads and builds to `<drive>:\SvnBuilder\workspaces` and the build history and logs to `<drive>:\SvnBuilder`. "Automatic" keeps the defaults (`%TEMP%\SvnBuilder` and `%APPDATA%\SvnBuilder`). The main screen shows a warning when the working drive has under 2 GB free, and a build is not started with under 500 MB free. If the settings file cannot be written to `%APPDATA%` (for example because that drive is full), it is saved as `svn-builder-settings.json` next to the executable.
+
+The app keeps each website project's installed packages (`node_modules`) on the working drive after a build and moves them back in for the next build of that project, so the install step only has to check them against `package.json`. The **Clean build** switch on the main screen discards them for one build and installs everything again; **Settings → Saved packages → Clear** removes them all, and the setting next to it chooses how long they are kept after a project's last build (3, 7 or 30 days, or always; 7 days by default). Expired ones are deleted when the app starts and after each build. npm installs run with `--prefer-offline --no-audit --no-fund`.
+
+When a network save folder needs its own sign-in and Windows already holds a connection to that share under another account (for example after opening it in File Explorer), the app drops that connection and signs in with the account entered. Mapped drives and connections to other shares on the same server are left alone.
+
+The result screen appears as soon as the output is saved; the temporary download (which can hold tens of thousands of dependency files) is deleted in the background afterwards. Temporary downloads left behind by a crash or a forced close are deleted the next time the app starts. Only one copy of the app runs at a time; starting it again brings the open window forward.
+
+The window has a fixed size (580 × 800) and cannot be resized or maximized; on a shorter screen it shrinks to fit and the form scrolls.
+
+> Wails CLI 2.12 cannot generate bindings with Go 1.27. If `wails build` stops with `package "bytes" without types was imported`, run it with an older toolchain: `$env:GOTOOLCHAIN = 'local'; wails build`.
 
 ---
 

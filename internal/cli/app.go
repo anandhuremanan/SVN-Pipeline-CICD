@@ -23,6 +23,30 @@ type RunRequest struct {
 	ConfigPath      string `json:"config_path"`
 	KeepWorkspace   bool   `json:"keep_workspace"`
 	Revision        string `json:"revision"`
+	// OutputDir is a folder (local or network share) that receives the published
+	// output under <OutputDir>/<repo>/Build-NNNN/<project>. Overrides YAML outputs.
+	OutputDir string `json:"output_dir,omitempty"`
+	// WorkspaceRoot overrides the directory where the checkout workspace is created.
+	WorkspaceRoot string `json:"workspace_root,omitempty"`
+	// CleanWorkspace removes the workspace after the run regardless of the config file.
+	CleanWorkspace bool `json:"clean_workspace,omitempty"`
+	// DeferCleanup leaves the workspace untouched when the run ends; the caller removes it
+	// (see the job's Workspace path). Lets a UI show the result before a slow cleanup.
+	DeferCleanup bool `json:"-"`
+	// ReuseDependencies keeps each Node project's node_modules between runs, in a ".deps" folder
+	// inside the workspace root, so that repeat builds skip most of the install.
+	ReuseDependencies bool `json:"reuse_dependencies,omitempty"`
+	// CleanDependencies discards the kept node_modules of the projects in this run first, for a
+	// build that installs everything from scratch.
+	CleanDependencies bool `json:"clean_dependencies,omitempty"`
+	// ProjectPaths limits the build to projects inside these repository folders. Empty builds everything.
+	ProjectPaths []string `json:"project_paths,omitempty"`
+	// BuildScript is the npm script used for Node projects that have no script set in YAML. Empty means "build".
+	BuildScript string `json:"build_script,omitempty"`
+	// ProjectScripts sets the npm script for individual ProjectPaths entries, keyed by the folder as written there.
+	ProjectScripts map[string]string `json:"project_scripts,omitempty"`
+	// OnFinish is invoked with the final job record once the run ends.
+	OnFinish func(job models.Job) `json:"-"`
 }
 
 // Engine defines the pipeline execution entry point interface.
@@ -121,6 +145,15 @@ func (a *App) handleRun(ctx context.Context, args []string) error {
 	fs.StringVar(&req.Password, "password", "", "SVN repository password (development only)")
 	fs.StringVar(&req.Revision, "revision", "HEAD", "SVN repository target revision")
 	fs.BoolVar(&req.KeepWorkspace, "keep-workspace", false, "Keep workspace directory after execution")
+	fs.StringVar(&req.OutputDir, "output", "", "Folder (local or network share) that receives each build under a unique build number")
+	fs.StringVar(&req.WorkspaceRoot, "workspace", "", "Directory where the checkout workspace is created")
+	fs.BoolVar(&req.CleanWorkspace, "clean-workspace", false, "Remove workspace directory after execution")
+	fs.StringVar(&req.BuildScript, "script", "", "npm script used to build Node projects (default \"build\")")
+	fs.BoolVar(&req.ReuseDependencies, "reuse-deps", false, "Keep node_modules between runs to speed up repeat builds")
+	fs.BoolVar(&req.CleanDependencies, "clean-deps", false, "Discard kept node_modules for this run's projects and install from scratch")
+
+	var projectPaths string
+	fs.StringVar(&projectPaths, "project", "", "Comma-separated repository folders to build (default: every project found)")
 
 	var flagArgs []string
 	var positional []string
@@ -132,7 +165,11 @@ func (a *App) handleRun(ctx context.Context, args []string) error {
 			if !strings.Contains(arg, "=") && (arg == "--config" || arg == "-config" ||
 				arg == "--username" || arg == "-username" ||
 				arg == "--password" || arg == "-password" ||
-				arg == "--revision" || arg == "-revision") {
+				arg == "--revision" || arg == "-revision" ||
+				arg == "--output" || arg == "-output" ||
+				arg == "--workspace" || arg == "-workspace" ||
+				arg == "--script" || arg == "-script" ||
+				arg == "--project" || arg == "-project") {
 				if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 					i++
 					flagArgs = append(flagArgs, args[i])
@@ -150,6 +187,8 @@ func (a *App) handleRun(ctx context.Context, args []string) error {
 	if len(positional) < 1 {
 		return fmt.Errorf("usage: cicd run <cicd.yaml|svn-url> [flags]")
 	}
+
+	req.ProjectPaths = SplitProjectPaths(projectPaths)
 
 	targetArg := positional[0]
 	if strings.HasSuffix(targetArg, ".yaml") || strings.HasSuffix(targetArg, ".yml") || fileExists(targetArg) {
@@ -187,6 +226,17 @@ func (a *App) handleServer(ctx context.Context, args []string) error {
 	}
 
 	return nil
+}
+
+// SplitProjectPaths parses a comma- or semicolon-separated list of repository folders.
+func SplitProjectPaths(list string) []string {
+	var paths []string
+	for _, p := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ';' }) {
+		if p = strings.TrimSpace(p); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths
 }
 
 func fileExists(path string) bool {
@@ -279,4 +329,11 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.Out, "  --password string     SVN repository password (development only)")
 	fmt.Fprintln(a.Out, "  --revision string     SVN target revision (default \"HEAD\")")
 	fmt.Fprintln(a.Out, "  --keep-workspace      Keep workspace directory after run")
+	fmt.Fprintln(a.Out, "  --output string       Folder or network share that receives each build under a unique build number")
+	fmt.Fprintln(a.Out, "  --workspace string    Directory where the checkout workspace is created")
+	fmt.Fprintln(a.Out, "  --clean-workspace     Remove workspace directory after run")
+	fmt.Fprintln(a.Out, "  --project string      Comma-separated repository folders to build (default: every project found)")
+	fmt.Fprintln(a.Out, "  --script string       npm script used to build Node projects (default \"build\")")
+	fmt.Fprintln(a.Out, "  --reuse-deps          Keep node_modules between runs to speed up repeat builds")
+	fmt.Fprintln(a.Out, "  --clean-deps          Discard kept node_modules for this run's projects first")
 }

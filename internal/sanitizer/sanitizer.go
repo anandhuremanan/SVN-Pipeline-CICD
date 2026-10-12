@@ -167,14 +167,19 @@ func (s *DefaultSanitizer) Sanitize(ctx context.Context, workspace string) (*Res
 			if d.IsDir() && (rule.Type == TypeDirectory || rule.Type == TypeAny) {
 				size := calculateDirSize(path)
 				s.logger.Info("removing generated directory", "path", rel)
-				// Chmod all files inside writable to ensure clean removal on Windows
-				_ = filepath.WalkDir(path, func(p string, _ os.DirEntry, wErr error) error {
-					if wErr == nil {
-						_ = os.Chmod(p, 0777)
-					}
-					return nil
-				})
-				if removeErr := os.RemoveAll(path); removeErr == nil {
+				removeErr := os.RemoveAll(path)
+				if removeErr != nil {
+					// Read-only files block removal on Windows. Making every file writable is slow
+					// for large dependency folders, so it is only done when the first attempt fails.
+					_ = filepath.WalkDir(path, func(p string, _ os.DirEntry, wErr error) error {
+						if wErr == nil {
+							_ = os.Chmod(p, 0777)
+						}
+						return nil
+					})
+					removeErr = os.RemoveAll(path)
+				}
+				if removeErr == nil {
 					res.DirectoriesRemoved = append(res.DirectoriesRemoved, rel)
 					res.BytesFreed += size
 				} else {

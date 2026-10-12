@@ -63,6 +63,12 @@ func (r *NativeRunner) Run(ctx context.Context, opts models.ExecOptions, handler
 	}
 
 	cmd := exec.CommandContext(ctx, resolvedCmd, opts.Args...)
+	hideConsoleWindow(cmd)
+
+	// When the run is cancelled or times out, stop the whole process tree, and do not wait
+	// forever for output pipes that a surviving grandchild might still hold open.
+	cmd.Cancel = func() error { return killProcessTree(cmd) }
+	cmd.WaitDelay = 5 * time.Second
 
 	if opts.Dir != "" {
 		cmd.Dir = opts.Dir

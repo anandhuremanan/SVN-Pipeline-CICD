@@ -16,6 +16,7 @@ import (
 	"github.com/anandhuremanan/cicd-engine/internal/cli"
 	"github.com/anandhuremanan/cicd-engine/internal/config"
 	"github.com/anandhuremanan/cicd-engine/internal/credentials"
+	"github.com/anandhuremanan/cicd-engine/internal/depcache"
 	"github.com/anandhuremanan/cicd-engine/internal/environment"
 	"github.com/anandhuremanan/cicd-engine/internal/logger"
 	"github.com/anandhuremanan/cicd-engine/internal/manifest"
@@ -187,6 +188,10 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 		shouldCleanup = false
 		cfg.KeepWorkspace = true
 		cfg.Workspace.Cleanup = false
+	} else if req.CleanWorkspace {
+		shouldCleanup = true
+		cfg.KeepWorkspace = false
+		cfg.Workspace.Cleanup = true
 	} else if cfg.Workspace.Cleanup {
 		shouldCleanup = true
 	} else if cfg.KeepWorkspace {
@@ -197,6 +202,18 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 
 	if req.Username != "" {
 		cfg.Username = req.Username
+	}
+
+	if req.WorkspaceRoot != "" {
+		cfg.WorkspaceRoot = req.WorkspaceRoot
+		cfg.Workspace.Root = req.WorkspaceRoot
+	}
+
+	// Fail before the checkout if the requested output folder cannot be reached.
+	if req.OutputDir != "" {
+		if mkErr := os.MkdirAll(req.OutputDir, 0755); mkErr != nil {
+			return fmt.Errorf("engine: output folder %q is not reachable: %w", req.OutputDir, mkErr)
+		}
 	}
 
 	log := logger.NewLogger(e.out, cfg.LogLevel)
@@ -227,7 +244,11 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 		_ = e.buildStore.Save(job)
 	}
 
-	pCtx := pipeline.NewPipelineContext(ctx, req.RepositoryURL, cfg.Username, req.Password)
+	if req.OnFinish != nil {
+		defer func() { req.OnFinish(job) }()
+	}
+
+	pCtx :=pipeline.NewPipelineContext(ctx, req.RepositoryURL, cfg.Username, req.Password)
 	pCtx.KeepWorkspace = !shouldCleanup
 	pCtx.Revision = rev
 
@@ -306,8 +327,15 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 	}
 
 	defer func() {
-		// Clean up node_modules and temporary build artifacts post-build (whether success or failure)
-		if wsSanitizer != nil && ws != nil && ws.Path != "" {
+		// The caller removes the workspace itself, so the run can report its result without
+		// waiting for tens of thousands of dependency files to be deleted.
+		if req.DeferCleanup {
+			return
+		}
+
+		// Clean up node_modules and temporary build artifacts post-build (whether success or failure).
+		// Pointless when the whole workspace is about to be removed anyway.
+		if !shouldCleanup && wsSanitizer != nil && ws != nil && ws.Path != "" {
 			fmt.Fprintln(e.out, "\nCleaning node_modules & temporary build artifacts...")
 			sanRes, sanErr := wsSanitizer.Sanitize(context.Background(), ws.Path)
 			if sanErr == nil && sanRes != nil {
@@ -355,15 +383,42 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 
 	// 3. Repository Checkout via SCM Provider with Retry
 	fmt.Fprintln(e.out, "\nChecking out repository...")
+	e.emitLog(job.ID, "Repository Checkout", "", "INFO", fmt.Sprintf("Checking out %s (revision %s)...", req.RepositoryURL, rev))
 	startStage = time.Now()
 	scmProv := e.scmProvider
 	if scmProv == nil {
 		scmProv = svn.NewProvider(e.processRun, log)
 	}
 
+	// A large checkout can run for minutes; report how far it is so it does not look stuck.
+	if reporter, ok := scmProv.(interface{ SetProgress(func(files int)) }); ok {
+		reporter.SetProgress(func(files int) {
+			e.emitLog(job.ID, "Repository Checkout", "", "INFO", fmt.Sprintf("Downloaded %d files", files))
+		})
+	}
+
+	// When the run names the folders to build and no pipeline file decides the targets, only those
+	// folders are downloaded. A pipeline file found in the repository afterwards may point at other
+	// folders, so the rest is fetched in that case.
+	folderProv, canCheckoutFolders := scmProv.(folderCheckouter)
+	onlyFolders := canCheckoutFolders && len(req.ProjectPaths) > 0 && pipelineConfig == nil
+	if onlyFolders {
+		fmt.Fprintf(e.out, "Downloading only: %s\n", strings.Join(req.ProjectPaths, ", "))
+	}
+
 	var repoInfo *repository.Info
 	checkoutErr := retry.Execute(ctx, retryPolicy, log, "SVN Checkout", true, func() error {
-		info, err := scmProv.CheckoutOrUpdate(ctx, req.RepositoryURL, ws.Path, pCtx.Revision, creds)
+		var info *repository.Info
+		var err error
+		if onlyFolders {
+			info, err = folderProv.CheckoutFolders(ctx, req.RepositoryURL, ws.Path, pCtx.Revision, req.ProjectPaths, creds)
+			if err == nil && hasPipelineFile(ws.Path) {
+				fmt.Fprintln(e.out, "Pipeline file found in repository; downloading the remaining folders.")
+				err = folderProv.DeepenAll(ctx, ws.Path, info.Revision, creds)
+			}
+		} else {
+			info, err = scmProv.CheckoutOrUpdate(ctx, req.RepositoryURL, ws.Path, pCtx.Revision, creds)
+		}
 		if err != nil {
 			return err
 		}
@@ -391,7 +446,7 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 	// 3.1 Auto-discover cicd.yaml from workspace root (when no explicit pipeline file was supplied).
 	// Priority: explicit file > workspace root cicd.yaml > legacy auto-scan
 	if pipelineConfig == nil {
-		for _, candidate := range []string{"cicd.yaml", "cicd.yml"} {
+		for _, candidate := range pipelineFileNames {
 			candidatePath := filepath.Join(ws.Path, candidate)
 			if info, statErr := os.Stat(candidatePath); statErr == nil && !info.IsDir() {
 				fmt.Fprintf(e.out, "\nPipeline file discovered in repository: %s\n\n", candidate)
@@ -466,6 +521,7 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 
 	// 4. Repository Scan & Plan Resolution
 	fmt.Fprintln(e.out, "\nScanning repository...")
+	e.emitLog(job.ID, "Repository Scan", "", "INFO", fmt.Sprintf("Checked out revision %s. Scanning for projects...", job.Revision))
 	startStage = time.Now()
 	projScanner := e.projScanner
 	if projScanner == nil {
@@ -531,6 +587,32 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 		fmt.Fprintf(e.out, "Found %d project(s).\n\n", len(buildProjects))
 	}
 
+	if len(req.ProjectPaths) > 0 {
+		selected, fErr := filterProjects(buildProjects, req.ProjectPaths, req.ProjectScripts)
+		if fErr != nil {
+			job.Status = models.JobStatusFailed
+			job.FinishedAt = time.Now()
+			job.Duration = time.Since(job.StartedAt)
+			job.ErrorMessage = fErr.Error()
+			_ = e.buildStore.Save(job)
+			_ = manifest.Generate(ws.Path, job)
+			fmt.Fprintln(e.out, fErr.Error())
+			return fErr
+		}
+		buildProjects = selected
+		fmt.Fprintf(e.out, "Building %d project(s) in: %s\n\n", len(buildProjects), strings.Join(req.ProjectPaths, ", "))
+	}
+
+	// A script given for this run applies to Node projects that have no script of their own in YAML.
+	if script := strings.TrimSpace(req.BuildScript); script != "" {
+		for i := range buildProjects {
+			isNode := buildProjects[i].Type == models.ProjectTypeReact || buildProjects[i].Type == models.ProjectTypeNext
+			if isNode && buildProjects[i].Build.Script == "" {
+				buildProjects[i].Build.Script = script
+			}
+		}
+	}
+
 	if len(buildProjects) == 0 {
 		fmt.Fprintln(e.out, "No supported projects found in repository.")
 		job.Status = models.JobStatusSuccess
@@ -569,7 +651,17 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 		bRep = reporter.NewConsoleReporter(e.out)
 	}
 
+	// The kept packages live inside the workspace root so that moving them in and out of a
+	// checkout stays on one drive.
+	var deps *depcache.Cache
+	if req.ReuseDependencies {
+		if rootAbs, absErr := filepath.Abs(cfg.WorkspaceRoot); absErr == nil {
+			deps = depcache.New(filepath.Join(rootAbs, DependencyCacheDir))
+		}
+	}
+
 	fmt.Fprintln(e.out, "Executing build plan...")
+	e.emitLog(job.ID, "Build", "", "INFO", fmt.Sprintf("Building %d project(s)...", len(plan.Projects)))
 
 	// 6. Execute Build Plan according to BuildStrategy
 	startStage = time.Now()
@@ -609,9 +701,33 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 			continue
 		}
 
+		// Bring back the packages kept from this project's previous build, so the install only
+		// has to reconcile them with package.json instead of fetching everything again.
+		useDeps := deps != nil && depcache.Supports(project)
+		if useDeps {
+			if req.CleanDependencies {
+				_ = deps.Drop(req.RepositoryURL, project)
+				fmt.Fprintf(e.out, "Clean build: discarded saved packages for %s.\n", project.Name)
+			} else if restored, restoreErr := deps.Restore(req.RepositoryURL, project); restoreErr != nil {
+				log.Warn("could not restore saved packages", "project", project.Name, "err", restoreErr)
+			} else if restored {
+				fmt.Fprintf(e.out, "Reusing saved packages for %s.\n", project.Name)
+				e.emitLog(job.ID, "Install Dependencies", project.Name, "INFO", "Reusing saved packages")
+			}
+		}
+
 		streamListener := &logStoreEventListener{engine: e, jobID: job.ID}
 		compListener := &compositeEventListener{listeners: []builder.EventListener{bRep, streamListener}}
 		bRes, buildErr := bld.Build(ctx, project, compListener)
+
+		// Keep the packages for next time once the install itself worked, even when a later step
+		// failed: a compile error in the code says nothing against the installed packages. After a
+		// failed or interrupted install they are left to be deleted with the workspace.
+		if useDeps && len(bRes.Steps) > 0 && bRes.Steps[0].Successful && ctx.Err() == nil {
+			if saveErr := deps.Save(req.RepositoryURL, project); saveErr != nil {
+				log.Warn("could not save packages for the next build", "project", project.Name, "err", saveErr)
+			}
+		}
 
 		for _, step := range bRes.Steps {
 			_ = e.logStore.Append(job.ID, logs.LogEntry{
@@ -715,14 +831,47 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 		}
 
 		pubSuccess := true
+		publishable := 0
 		for _, bRes := range buildResults {
+			if bRes.Status == models.BuildStatusSuccess && len(bRes.Artifacts) > 0 {
+				publishable++
+			}
+		}
+
+		// An explicit output folder wins over YAML outputs: everything from this run
+		// lands in one freshly numbered folder, <OutputDir>/<repo>/Build-NNNN/<project>.
+		if req.OutputDir != "" && publishable > 0 {
+			e.emitLog(job.ID, "Publish Deployable Output", "", "INFO", fmt.Sprintf("Saving build output to %s...", req.OutputDir))
+			number, buildDir, allocErr := publisher.AllocateBuildDir(filepath.Join(req.OutputDir, outputFolderName(req.RepositoryURL)))
+			if allocErr != nil {
+				log.Error("failed to reserve build number", "err", allocErr)
+				pubSuccess = false
+				hasFailure = true
+				job.ErrorMessage = allocErr.Error()
+				bRep.ReportFailure(repoName, "Publish Deployable Output", "reserve build number", 1, time.Since(startStage), allocErr.Error())
+			} else {
+				job.BuildNumber = number
+				job.BuildDir = buildDir
+				fmt.Fprintf(e.out, "Build number: %d\n\n", number)
+			}
+		}
+
+		for _, bRes := range buildResults {
+			if !pubSuccess {
+				break
+			}
 			if bRes.Status == models.BuildStatusSuccess && len(bRes.Artifacts) > 0 {
 				targetDir := targetOutputs[bRes.Project.Name]
 				if targetDir == "" {
 					targetDir = defaultDeployRoot
 				}
+				pubRepoName := repoName
+				if job.BuildDir != "" {
+					targetDir = job.BuildDir
+					pubRepoName = ""
+				}
 
-				pubDir, pubErr := pub.Publish(ctx, repoName, bRes.Project, bRes, targetDir, replaceExisting)
+				pubDir, pubErr := pub.Publish(ctx, pubRepoName, bRes.Project, bRes, targetDir, replaceExisting)
 				if pubErr != nil {
 					log.Error("failed to publish deployable output", "project", bRes.Project.Name, "err", pubErr)
 					pubSuccess = false
@@ -741,14 +890,30 @@ func (e *Engine) Run(parentCtx context.Context, req cli.RunRequest) error {
 			}
 		}
 
+		if job.BuildDir != "" {
+			if pubSuccess && ctx.Err() == nil {
+				job.BuildResults = buildResults
+				if infoErr := publisher.WriteBuildInfo(job, cfg.Username); infoErr != nil {
+					log.Warn("failed to write build info", "err", infoErr)
+				}
+			} else {
+				// Never leave a half-copied build on the share under a valid-looking number.
+				_ = os.RemoveAll(job.BuildDir)
+				job.BuildNumber = 0
+				job.BuildDir = ""
+				job.DeploymentOutputs = make(map[string]string)
+			}
+		}
+
 		job.StageTimings["Publish Deployable Output"] = time.Since(startStage)
 
 		if pubSuccess {
 			fmt.Fprintln(e.out, "Deployment output published successfully.")
 		}
 
-		// Post-publish workspace sanitization to save server disk space
-		if wsSanitizer != nil {
+		// Post-publish workspace sanitization to save server disk space. Skipped when the
+		// workspace is removed entirely, by this run or by the caller.
+		if wsSanitizer != nil && !shouldCleanup && !req.DeferCleanup {
 			_, _ = wsSanitizer.Sanitize(ctx, ws.Path)
 		}
 	}
@@ -798,6 +963,131 @@ func extractRepoName(rawURL string) string {
 		prevLower := strings.ToLower(prev)
 		if prevLower != "svn" && prevLower != "trunk" && prevLower != "branches" && !strings.Contains(prev, ":") && prevLower != "http:" && prevLower != "https:" {
 			return prev
+		}
+	}
+	return last
+}
+
+// DependencyCacheDir is the folder inside the workspace root that holds kept node_modules folders.
+const DependencyCacheDir = ".deps"
+
+// folderCheckouter is implemented by SCM providers that can download selected folders only.
+type folderCheckouter interface {
+	CheckoutFolders(ctx context.Context, repoURL, targetDir, revision string, folders []string, creds credentials.Provider) (*repository.Info, error)
+	DeepenAll(ctx context.Context, targetDir, revision string, creds credentials.Provider) error
+}
+
+// pipelineFileNames are the pipeline files looked for in the top folder of a repository.
+var pipelineFileNames = []string{"cicd.yaml", "cicd.yml"}
+
+func hasPipelineFile(workspacePath string) bool {
+	for _, name := range pipelineFileNames {
+		if info, err := os.Stat(filepath.Join(workspacePath, name)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// ProjectFilterError reports that the requested repository folders contain no buildable project.
+type ProjectFilterError struct {
+	// Requested lists the folders that were asked for.
+	Requested []string
+	// Available lists the folders of every project found in the repository.
+	Available []string
+}
+
+func (e *ProjectFilterError) Error() string {
+	msg := fmt.Sprintf("No buildable project was found in folder %q.", strings.Join(e.Requested, ", "))
+	if len(e.Available) > 0 {
+		msg += " Folders that can be built: " + strings.Join(e.Available, ", ") + "."
+	}
+	return msg
+}
+
+// normalizeProjectPath makes folder comparison independent of case and slash style.
+// The top folder of the repository, written "." or "/", becomes "".
+func normalizeProjectPath(p string) string {
+	p = strings.ReplaceAll(strings.TrimSpace(p), "\\", "/")
+	p = strings.ToLower(strings.Trim(p, "/"))
+	if p == "." {
+		return ""
+	}
+	return p
+}
+
+// filterProjects keeps the projects located in, or below, one of the requested repository folders,
+// in the order the folders were requested. A folder also matches a project by name, so YAML project
+// names can be used, and "." selects only the project in the top folder. A script given for a folder
+// replaces the script of the Node projects it matches.
+// Every requested folder must match at least one project.
+func filterProjects(projects []models.Project, folders []string, scripts map[string]string) ([]models.Project, error) {
+	var selected []models.Project
+	var unmatched []string
+	taken := make(map[int]bool)
+
+	for _, folder := range folders {
+		want := normalizeProjectPath(folder)
+		script := strings.TrimSpace(scripts[folder])
+		matched := false
+
+		for i, project := range projects {
+			projectPath := normalizeProjectPath(project.Path)
+			inFolder := projectPath == want || (want != "" && strings.HasPrefix(projectPath, want+"/"))
+			if !inFolder && !strings.EqualFold(project.Name, strings.TrimSpace(folder)) {
+				continue
+			}
+			matched = true
+			if taken[i] {
+				continue
+			}
+			taken[i] = true
+			if script != "" && (project.Type == models.ProjectTypeReact || project.Type == models.ProjectTypeNext) {
+				project.Build.Script = script
+			}
+			selected = append(selected, project)
+		}
+
+		if !matched {
+			unmatched = append(unmatched, folder)
+		}
+	}
+
+	if len(unmatched) > 0 {
+		filterErr := &ProjectFilterError{Requested: unmatched}
+		for _, project := range projects {
+			available := strings.ReplaceAll(project.Path, "\\", "/")
+			if available == "" {
+				available = ". (top folder)"
+			}
+			filterErr.Available = append(filterErr.Available, available)
+		}
+		return nil, filterErr
+	}
+	return selected, nil
+}
+
+// outputFolderName derives the per-application folder used under an output folder, so that
+// each application (and each branch or tag of it) keeps its own build number sequence.
+func outputFolderName(rawURL string) string {
+	var parts []string
+	for _, p := range strings.FieldsFunc(rawURL, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if !strings.Contains(p, ":") {
+			parts = append(parts, p)
+		}
+	}
+	n := len(parts)
+	if n == 0 {
+		return "build"
+	}
+
+	last := parts[n-1]
+	if strings.EqualFold(last, "trunk") && n >= 2 {
+		return parts[n-2]
+	}
+	if n >= 3 {
+		if kind := strings.ToLower(parts[n-2]); kind == "branches" || kind == "tags" {
+			return parts[n-3] + "_" + last
 		}
 	}
 	return last

@@ -11,6 +11,18 @@ import (
 	"github.com/anandhuremanan/cicd-engine/internal/models"
 )
 
+// skipDirs lists directory names that never contain projects of their own.
+var skipDirs = map[string]bool{
+	"node_modules": true,
+	".svn":         true,
+	".git":         true,
+	"bin":          true,
+	"obj":          true,
+	"dist":         true,
+	".next":        true,
+	".workspaces":  true,
+}
+
 // Scanner defines the interface for recursive project discovery.
 type Scanner interface {
 	// Scan recursively searches rootDir for supported projects.
@@ -55,17 +67,6 @@ func (s *RepositoryScanner) Scan(ctx context.Context, rootDir string) ([]models.
 	}
 
 	var projects []models.Project
-
-	skipDirs := map[string]bool{
-		"node_modules": true,
-		".svn":         true,
-		".git":         true,
-		"bin":          true,
-		"obj":          true,
-		"dist":         true,
-		".next":        true,
-		".workspaces":  true,
-	}
 
 	err = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
