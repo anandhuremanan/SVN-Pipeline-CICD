@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import { CancelBuild, CheckTools, ChooseFolder, FetchFolders, GetStorage, LoadSettings, OpenFolder, SetTheme, StartBuild } from '../wailsjs/go/main/App'
+import { CancelBuild, CheckTools, ChooseFolder, FetchFolders, ForgetRepository, GetStorage, LoadSettings, OpenFolder, SetTheme, StartBuild } from '../wailsjs/go/main/App'
 import { main } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import { Settings } from './Settings'
@@ -9,6 +9,7 @@ import type { Theme } from './theme'
 import {
   BoxIcon,
   CheckIcon,
+  ChevronDownIcon,
   CopyButton,
   CrossIcon,
   Elapsed,
@@ -18,6 +19,7 @@ import {
   LogDetails,
   Notice,
   PasswordInput,
+  Picker,
   PlayIcon,
   PlusIcon,
   SearchIcon,
@@ -94,6 +96,16 @@ function sameFolder(a: string, b: string) {
   return normalize(a) === normalize(b)
 }
 
+const sameAddress = (a: string, b: string) => a.trim().replace(/\/+$/, '').toLowerCase() === b.trim().replace(/\/+$/, '').toLowerCase()
+
+// describeAddress splits an SVN address for the drop-down: the path is what tells addresses apart,
+// the server is secondary.
+function describeAddress(url: string) {
+  const match = url.match(/^[a-z+]+:\/\/+([^/]+)\/*(.*)$/i)
+  if (!match || !match[2]) return { label: url }
+  return { label: match[2], hint: match[1] }
+}
+
 const isNetworkFolder = (path: string) => /^\s*[\\/]{2}[^\\/]+[\\/]+[^\\/]/.test(path)
 
 export default function App() {
@@ -105,6 +117,10 @@ export default function App() {
   const [revision, setRevision] = useState('')
   const [projects, setProjects] = useState<ProjectRow[]>([EMPTY_ROW])
   const [cleanBuild, setCleanBuild] = useState(false)
+  const [recentRepos, setRecentRepos] = useState<string[]>([])
+  // Which drop-down list is open, if any.
+  const [picker, setPicker] = useState<'repos' | 'folders' | null>(null)
+  const closePicker = useCallback(() => setPicker(null), [])
   const [shareSignIn, setShareSignIn] = useState(false)
   const [shareUsername, setShareUsername] = useState('')
   const [sharePassword, setSharePassword] = useState('')
@@ -131,6 +147,8 @@ export default function App() {
       setUsername(s.username ?? '')
       setOutputDir(s.outputDir ?? '')
       setShareUsername(s.shareUsername ?? '')
+      // Settings saved before the list existed only know the last address.
+      setRecentRepos(s.recentRepositories?.length ? s.recentRepositories : s.repositoryUrl ? [s.repositoryUrl] : [])
       setShareSignIn(!!s.shareUsername)
       setTheme(toTheme(s.theme))
       applyTheme(toTheme(s.theme))
@@ -205,6 +223,7 @@ export default function App() {
         }),
       )
       if (result.started) {
+        rememberAddress(repositoryUrl)
         // A clean build is a one-off; the next build goes back to reusing packages.
         setCleanBuild(false)
         setStartedAt(Date.now())
@@ -218,6 +237,12 @@ export default function App() {
     } finally {
       setStarting(false)
     }
+  }
+
+  // Mirrors what the backend saves, so the address list is current without reloading settings.
+  function rememberAddress(url: string) {
+    const address = url.trim().replace(/\/+$/, '')
+    if (address) setRecentRepos((list) => [address, ...list.filter((other) => !sameAddress(other, address))].slice(0, 20))
   }
 
   function updateProject(index: number, change: Partial<ProjectRow>) {
@@ -243,7 +268,11 @@ export default function App() {
     setFetchError('')
     setFetching(true)
     try {
-      setFound(await FetchFolders(main.BuildRequest.createFrom({ repositoryUrl, username, password, revision })))
+      const folders = await FetchFolders(main.BuildRequest.createFrom({ repositoryUrl, username, password, revision }))
+      setFound(folders)
+      rememberAddress(repositoryUrl)
+      // Show what was found straight away, ready to pick from.
+      if (folders.length > 0) setPicker('folders')
     } catch (err) {
       setFound(null)
       setFetchError(String(err))
@@ -253,6 +282,7 @@ export default function App() {
   }
 
   const isSelected = (folder: string) => projects.some((row) => sameFolder(row.folder, folder))
+  const chosenCount = found ? found.filter((f) => isSelected(f.folder)).length : 0
   const isDotnet = (folder: string) => !!found?.some((f) => f.type === 'dotnet' && sameFolder(f.folder, folder))
 
   function toggleFolder(folder: string) {
@@ -357,13 +387,38 @@ export default function App() {
           <Section step={1} title="Source">
             <div className="flex flex-col gap-3">
               <Field label="Project address in SVN" htmlFor="repo">
-                <TextInput
-                  id="repo"
-                  value={repositoryUrl}
-                  onChange={changeRepositoryUrl}
-                  placeholder="https://svn.company.com/repos/MyProject/trunk"
-                  autoFocus
-                />
+                <div className="relative">
+                  <TextInput
+                    id="repo"
+                    value={repositoryUrl}
+                    onChange={changeRepositoryUrl}
+                    placeholder="https://svn.company.com/repos/MyProject/trunk"
+                    autoFocus
+                    trailing
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setPicker(picker === 'repos' ? null : 'repos')}
+                    aria-label="Addresses used before"
+                    aria-haspopup="listbox"
+                    aria-expanded={picker === 'repos'}
+                    title="Addresses used before"
+                    className="absolute top-0.5 right-1 grid size-8 place-items-center rounded-md text-faint transition hover:text-ink"
+                  >
+                    <ChevronDownIcon />
+                  </button>
+                  {picker === 'repos' && (
+                    <Picker
+                      items={recentRepos.map((url) => ({ key: url, ...describeAddress(url), selected: sameAddress(url, repositoryUrl) }))}
+                      onPick={changeRepositoryUrl}
+                      onClose={closePicker}
+                      onRemove={(url) => ForgetRepository(url).then(setRecentRepos)}
+                      searchPlaceholder="Search addresses"
+                      emptyText="Addresses you build from are remembered here."
+                      footer="Addresses used on this PC. New ones are added when you build."
+                    />
+                  )}
+                </div>
               </Field>
               <div className="grid grid-cols-[1fr_1fr_6rem] gap-3">
                 <Field label="SVN user name" htmlFor="user">
@@ -399,29 +454,38 @@ export default function App() {
               <p className="mb-3 text-[13px] text-muted">No React, Next.js or .NET project was found at this address.</p>
             )}
             {found && found.length > 0 && (
-              <div className="mb-3">
-                <div className="mb-2 text-[12.5px] text-muted">Found in SVN. Click a folder to add or remove it.</div>
-                <div className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
-                  {found.map((f) => {
-                    const selected = isSelected(f.folder)
-                    return (
-                      <button
-                        key={f.folder}
-                        type="button"
-                        aria-pressed={selected}
-                        onClick={() => toggleFolder(f.folder)}
-                        className={
-                          'flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[13px] transition ' +
-                          (selected ? 'border-accent bg-accent-soft text-accent' : 'border-line bg-field hover:border-line-strong')
-                        }
-                      >
-                        {selected && <CheckIcon size={11} />}
-                        <span className="font-medium">{f.folder === '.' ? 'Top folder' : f.folder}</span>
-                        <span className={selected ? 'opacity-70' : 'text-faint'}>{SHORT_KINDS[f.type] ?? f.type}</span>
-                      </button>
-                    )
-                  })}
-                </div>
+              <div className="relative mb-3">
+                <button
+                  type="button"
+                  onClick={() => setPicker(picker === 'folders' ? null : 'folders')}
+                  aria-haspopup="listbox"
+                  aria-expanded={picker === 'folders'}
+                  className="flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-line bg-field px-3 text-left transition hover:border-line-strong"
+                >
+                  <span className="truncate">
+                    Choose from {found.length} folder{found.length === 1 ? '' : 's'} found in SVN
+                    {chosenCount > 0 && <span className="text-muted"> · {chosenCount} chosen</span>}
+                  </span>
+                  <span className="shrink-0 text-faint">
+                    <ChevronDownIcon />
+                  </span>
+                </button>
+                {picker === 'folders' && (
+                  <Picker
+                    multi
+                    items={found.map((f) => ({
+                      key: f.folder,
+                      label: f.folder === '.' ? 'Top folder' : f.folder,
+                      hint: SHORT_KINDS[f.type] ?? f.type,
+                      selected: isSelected(f.folder),
+                    }))}
+                    onPick={toggleFolder}
+                    onClose={closePicker}
+                    searchPlaceholder="Search folders"
+                    emptyText="No folders were found."
+                    footer="Click a folder to add or remove it."
+                  />
+                )}
               </div>
             )}
 

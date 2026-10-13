@@ -12,6 +12,8 @@ export function ClearSavedPackages():Promise<main.StorageInfo>;
 
 export function FetchFolders(arg1:main.BuildRequest):Promise<Array<main.RemoteFolder>>;
 
+export function ForgetRepository(arg1:string):Promise<Array<string>>;
+
 export function GetStorage():Promise<main.StorageInfo>;
 
 export function LoadSettings():Promise<main.Settings>;

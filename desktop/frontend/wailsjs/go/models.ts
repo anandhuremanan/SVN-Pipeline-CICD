@@ -101,6 +101,7 @@ export namespace main {
 	    projects: ProjectTarget[];
 	    storageDir: string;
 	    theme: string;
+	    recentRepositories: string[];
 	    packageKeepDays: number;
 	
 	    static createFrom(source: any = {}) {
@@ -116,6 +117,7 @@ export namespace main {
 	        this.projects = this.convertValues(source["projects"], ProjectTarget);
 	        this.storageDir = source["storageDir"];
 	        this.theme = source["theme"];
+	        this.recentRepositories = source["recentRepositories"];
 	        this.packageKeepDays = source["packageKeepDays"];
 	    }
 	

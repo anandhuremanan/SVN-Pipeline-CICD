@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { ChooseFolder, ClearSavedPackages, SetPackageKeepDays, SetStorageDir } from '../wailsjs/go/main/App'
 import type { main } from '../wailsjs/go/models'
+import { BrowserOpenURL } from '../wailsjs/runtime/runtime'
 import type { Theme } from './theme'
 import { BackIcon, CheckIcon, FolderIcon, Notice, Spinner, fieldButton, primaryButton } from './ui'
 
@@ -17,6 +18,8 @@ export function formatBytes(bytes: number) {
 }
 
 const samePath = (a: string, b: string) => a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase()
+
+const CONTACT_EMAIL = 'joseph.antony@gramproindia.com'
 
 // How long saved packages stay after a project's last build; 0 days means until cleared by hand.
 const KEEP_OPTIONS = [
@@ -230,6 +233,19 @@ export function Settings(props: {
             <Location label="Downloads and builds" path={storage.workspaceDir} free={storage.workspaceFreeBytes} />
             <Location label="Build history and logs" path={storage.dataDir} free={storage.dataFreeBytes} />
           </dl>
+        </section>
+
+        <section aria-labelledby="about" className="rounded-xl border border-line bg-surface px-4 py-3.5 text-[13px] shadow-card">
+          <h2 id="about" className="text-[14px] font-semibold">
+            About
+          </h2>
+          <p className="mt-1 text-muted">Made by Joseph and Team at Grampro Research and Development - 2026</p>
+          <p className="mt-2 flex flex-wrap items-center gap-x-1.5 text-muted">
+            Contact
+            <button type="button" onClick={() => BrowserOpenURL(`mailto:${CONTACT_EMAIL}`)} className="selectable font-medium text-accent transition hover:text-accent-hover hover:underline">
+              {CONTACT_EMAIL}
+            </button>
+          </p>
         </section>
       </main>
 

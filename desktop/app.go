@@ -61,6 +61,8 @@ type Settings struct {
 	StorageDir string `json:"storageDir"`
 	// Theme is "light", "dark" or "system" (follow Windows). Empty means "system".
 	Theme string `json:"theme"`
+	// RecentRepositories lists the SVN addresses built from on this PC, most recent first.
+	RecentRepositories []string `json:"recentRepositories"`
 	// PackageKeepDays is how many days saved packages are kept after a project's last build.
 	// Zero means not chosen yet (the default applies); -1 means until cleared by hand.
 	PackageKeepDays int `json:"packageKeepDays"`
@@ -346,6 +348,44 @@ func (a *App) CheckTools() []ToolStatus {
 	return tools
 }
 
+// maxRecentRepositories caps the list of remembered SVN addresses.
+const maxRecentRepositories = 20
+
+func sameRepository(a, b string) bool {
+	return strings.EqualFold(strings.TrimRight(strings.TrimSpace(a), "/"), strings.TrimRight(strings.TrimSpace(b), "/"))
+}
+
+// rememberRepository puts url at the front of the recent list, without duplicates.
+func rememberRepository(recent []string, url string) []string {
+	url = strings.TrimRight(strings.TrimSpace(url), "/")
+	if url == "" {
+		return recent
+	}
+	updated := []string{url}
+	for _, existing := range recent {
+		if !sameRepository(existing, url) && len(updated) < maxRecentRepositories {
+			updated = append(updated, existing)
+		}
+	}
+	return updated
+}
+
+// ForgetRepository removes an address from the remembered list and returns what is left.
+func (a *App) ForgetRepository(url string) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	kept := []string{}
+	for _, existing := range a.settings.RecentRepositories {
+		if !sameRepository(existing, url) {
+			kept = append(kept, existing)
+		}
+	}
+	a.settings.RecentRepositories = kept
+	_ = a.saveSettings()
+	return kept
+}
+
 // RemoteFolder is a buildable folder found in the SVN repository.
 type RemoteFolder struct {
 	// Folder is the path inside the repository; "." is the top folder.
@@ -400,6 +440,13 @@ func (a *App) FetchFolders(req BuildRequest) ([]RemoteFolder, error) {
 		}
 		folders = append(folders, RemoteFolder{Folder: folder, Type: string(p.Type)})
 	}
+
+	// The address answered, so it is worth remembering even before a build is started from it.
+	a.mu.Lock()
+	a.settings.RecentRepositories = rememberRepository(a.settings.RecentRepositories, repoURL)
+	_ = a.saveSettings()
+	a.mu.Unlock()
+
 	return folders, nil
 }
 
@@ -461,6 +508,7 @@ func (a *App) StartBuild(req BuildRequest) StartResult {
 	a.stage = ""
 
 	a.settings.RepositoryURL = req.RepositoryURL
+	a.settings.RecentRepositories = rememberRepository(a.settings.RecentRepositories, req.RepositoryURL)
 	a.settings.Username = req.Username
 	a.settings.OutputDir = req.OutputDir
 	a.settings.ShareUsername = req.ShareUsername

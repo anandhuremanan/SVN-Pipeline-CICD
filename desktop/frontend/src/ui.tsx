@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import { ClipboardSetText } from '../wailsjs/runtime/runtime'
 
 // Small building blocks shared by the three screens of the app.
@@ -57,6 +57,8 @@ interface TextInputProps {
   label?: string
   disabled?: boolean
   mono?: boolean
+  // trailing leaves room on the right for a button placed over the box.
+  trailing?: boolean
 }
 
 export function TextInput(props: TextInputProps) {
@@ -73,7 +75,7 @@ export function TextInput(props: TextInputProps) {
       aria-label={props.label}
       disabled={props.disabled}
       spellCheck={false}
-      className={inputBase + (props.mono ? ' font-mono text-[13px]' : '')}
+      className={inputBase + (props.mono ? ' font-mono text-[13px]' : '') + (props.trailing ? ' pr-9' : '')}
     />
   )
 }
@@ -102,6 +104,136 @@ export function PasswordInput(props: { id: string; value: string; onChange: (val
       >
         <EyeIcon off={shown} />
       </button>
+    </div>
+  )
+}
+
+export interface PickerItem {
+  key: string
+  label: string
+  hint?: string
+  selected?: boolean
+}
+
+// Picker is a searchable drop-down list. Place it inside a `relative` element; it opens below it.
+// With `multi`, picking toggles an item and the list stays open.
+export function Picker(props: {
+  items: PickerItem[]
+  onPick: (key: string) => void
+  onClose: () => void
+  searchPlaceholder: string
+  emptyText: string
+  multi?: boolean
+  onRemove?: (key: string) => void
+  footer?: ReactNode
+}) {
+  const [query, setQuery] = useState('')
+  const [active, setActive] = useState(0)
+  const panel = useRef<HTMLDivElement>(null)
+  const list = useRef<HTMLUListElement>(null)
+
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  const shown = props.items.filter((item) => {
+    const text = (item.label + ' ' + (item.hint ?? '')).toLowerCase()
+    return words.every((word) => text.includes(word))
+  })
+  const activeIndex = Math.min(active, Math.max(0, shown.length - 1))
+
+  useEffect(() => {
+    function onPointerDown(e: PointerEvent) {
+      if (panel.current && !panel.current.contains(e.target as Node)) props.onClose()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [props.onClose])
+
+  useEffect(() => {
+    list.current?.children[activeIndex]?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex])
+
+  function pick(key: string) {
+    props.onPick(key)
+    if (!props.multi) props.onClose()
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActive(Math.min(activeIndex + 1, shown.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActive(Math.max(activeIndex - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (shown[activeIndex]) pick(shown[activeIndex].key)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      props.onClose()
+    }
+  }
+
+  return (
+    <div
+      ref={panel}
+      className="absolute top-full right-0 left-0 z-20 mt-1.5 overflow-hidden rounded-[10px] border border-line-strong bg-surface shadow-[0_12px_32px_rgb(0_0_0/0.18)]"
+    >
+      <div className="flex items-center gap-2 border-b border-line px-3 text-faint">
+        <SearchIcon />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value)
+            setActive(0)
+          }}
+          onKeyDown={onKeyDown}
+          placeholder={props.searchPlaceholder}
+          aria-label={props.searchPlaceholder}
+          autoFocus
+          autoComplete="off"
+          spellCheck={false}
+          className="h-9 w-full min-w-0 bg-transparent text-ink placeholder:text-faint"
+        />
+      </div>
+
+      {shown.length === 0 ? (
+        <p className="px-3 py-3 text-[13px] text-muted">{props.items.length === 0 ? props.emptyText : 'Nothing matches your search.'}</p>
+      ) : (
+        <ul ref={list} role="listbox" aria-multiselectable={props.multi} className="max-h-52 overflow-y-auto p-1">
+          {shown.map((item, i) => (
+            <li
+              key={item.key}
+              role="option"
+              aria-selected={!!item.selected}
+              onClick={() => pick(item.key)}
+              onPointerMove={() => setActive(i)}
+              className={'flex h-8 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] ' + (i === activeIndex ? 'bg-accent-soft' : '')}
+            >
+              <span className={'grid w-4 shrink-0 place-items-center text-accent ' + (item.selected ? '' : 'invisible')}>
+                <CheckIcon size={12} />
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium">{item.label}</span>
+              {item.hint && <span className="shrink-0 text-faint">{item.hint}</span>}
+              {props.onRemove && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    props.onRemove?.(item.key)
+                  }}
+                  aria-label={`Forget ${item.label}`}
+                  title="Forget this address"
+                  className="grid size-6 shrink-0 place-items-center rounded text-faint transition hover:text-ink"
+                >
+                  <CrossIcon size={11} />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {props.footer && <div className="border-t border-line px-3 py-2 text-[12.5px] text-faint">{props.footer}</div>}
     </div>
   )
 }
@@ -283,6 +415,14 @@ function CopyIcon() {
     <svg width="13" height="13" viewBox="0 0 16 16" {...stroke} strokeWidth="1.5" aria-hidden="true">
       <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
       <path d="M10.5 5.5v-2c0-.6-.4-1-1-1h-6c-.6 0-1 .4-1 1v6c0 .6.4 1 1 1h2" />
+    </svg>
+  )
+}
+
+export function ChevronDownIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" {...stroke} strokeWidth="1.8" aria-hidden="true">
+      <path d="M3.5 6L8 10.5 12.5 6" />
     </svg>
   )
 }

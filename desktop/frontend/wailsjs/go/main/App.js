@@ -22,6 +22,10 @@ export function FetchFolders(arg1) {
   return window['go']['main']['App']['FetchFolders'](arg1);
 }
 
+export function ForgetRepository(arg1) {
+  return window['go']['main']['App']['ForgetRepository'](arg1);
+}
+
 export function GetStorage() {
   return window['go']['main']['App']['GetStorage']();
 }
