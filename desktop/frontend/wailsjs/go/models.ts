@@ -1,5 +1,19 @@
 export namespace main {
 	
+	export class AppInfo {
+	    version: string;
+	    updateSource: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.updateSource = source["updateSource"];
+	    }
+	}
 	export class ProjectTarget {
 	    folder: string;
 	    script: string;
@@ -225,6 +239,24 @@ export namespace main {
 	        this.name = source["name"];
 	        this.installed = source["installed"];
 	        this.version = source["version"];
+	    }
+	}
+	export class UpdateInfo {
+	    available: boolean;
+	    version: string;
+	    notes: string;
+	    problem: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.version = source["version"];
+	        this.notes = source["notes"];
+	        this.problem = source["problem"];
 	    }
 	}
 

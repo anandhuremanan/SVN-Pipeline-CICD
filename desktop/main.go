@@ -21,6 +21,8 @@ const (
 )
 
 func main() {
+	finishUpdate()
+
 	app, err := NewApp()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

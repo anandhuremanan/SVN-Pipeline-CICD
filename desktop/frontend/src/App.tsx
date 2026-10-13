@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import { CancelBuild, CheckTools, ChooseFolder, FetchFolders, ForgetRepository, GetStorage, LoadSettings, OpenFolder, SetTheme, StartBuild } from '../wailsjs/go/main/App'
+import { CancelBuild, CheckForUpdate, CheckTools, ChooseFolder, FetchFolders, ForgetRepository, GetAppInfo, GetStorage, InstallUpdate, LoadSettings, OpenFolder, SetTheme, StartBuild } from '../wailsjs/go/main/App'
 import { main } from '../wailsjs/go/models'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import { Settings } from './Settings'
@@ -106,7 +106,26 @@ function describeAddress(url: string) {
   return { label: match[2], hint: match[1] }
 }
 
-const isNetworkFolder = (path: string) => /^\s*[\\/]{2}[^\\/]+[\\/]+[^\\/]/.test(path)
+// Folders whose name starts with this prefix hold the shared framework code.
+const FRAMEWORK_PREFIX = 'GRAMPRO.'
+const HIDE_FRAMEWORK_KEY = 'svn-builder-hide-framework'
+
+const isFrameworkFolder = (folder: string) =>
+  folder.split(/[\\/]/).some((part) => part.toUpperCase().startsWith(FRAMEWORK_PREFIX))
+
+// The switch is remembered between sessions and is on unless it was turned off.
+function rememberedHideFramework() {
+  try {
+    return localStorage.getItem(HIDE_FRAMEWORK_KEY) !== 'off'
+  } catch {
+    return true
+  }
+}
+
+// The backend words every SVN sign-in problem with this phrase (see friendlyFailure in app.go).
+const needsSvnSignIn = (message: string) => message.includes('SVN user name')
+
+const isNetworkFolder =(path: string) => /^\s*[\\/]{2}[^\\/]+[\\/]+[^\\/]/.test(path)
 
 export default function App() {
   const [view, setView] = useState<View>('form')
@@ -117,6 +136,9 @@ export default function App() {
   const [revision, setRevision] = useState('')
   const [projects, setProjects] = useState<ProjectRow[]>([EMPTY_ROW])
   const [cleanBuild, setCleanBuild] = useState(false)
+  const [hideFramework, setHideFramework] = useState(rememberedHideFramework)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [signInOpen, setSignInOpen] = useState(false)
   const [recentRepos, setRecentRepos] = useState<string[]>([])
   // Which drop-down list is open, if any.
   const [picker, setPicker] = useState<'repos' | 'folders' | null>(null)
@@ -131,6 +153,11 @@ export default function App() {
   const [fetchError, setFetchError] = useState('')
   const [tools, setTools] = useState<main.ToolStatus[]>([])
   const [storage, setStorage] = useState<main.StorageInfo | null>(null)
+  const [appInfo, setAppInfo] = useState<main.AppInfo | null>(null)
+  const [update, setUpdate] = useState<main.UpdateInfo | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [installingUpdate, setInstallingUpdate] = useState(false)
+  const [updateError, setUpdateError] = useState('')
   const [theme, setTheme] = useState<Theme>(rememberedTheme)
 
   const [stage, setStage] = useState('')
@@ -156,6 +183,8 @@ export default function App() {
     })
     CheckTools().then(setTools)
     GetStorage().then(setStorage)
+    GetAppInfo().then(setAppInfo)
+    CheckForUpdate().then(setUpdate)
 
     const offStage = EventsOn('build:stage', (update: StageUpdate) => {
       setStage(update.stage)
@@ -276,6 +305,7 @@ export default function App() {
     } catch (err) {
       setFound(null)
       setFetchError(String(err))
+      if (needsSvnSignIn(String(err))) setSignInOpen(true)
     } finally {
       setFetching(false)
     }
@@ -283,7 +313,20 @@ export default function App() {
 
   const isSelected = (folder: string) => projects.some((row) => sameFolder(row.folder, folder))
   const chosenCount = found ? found.filter((f) => isSelected(f.folder)).length : 0
+  // Framework folders are in nearly every project and are never built on their own, so the list
+  // leaves them out unless asked.
+  const frameworkCount = found ? found.filter((f) => isFrameworkFolder(f.folder)).length : 0
+  const listed = found ? found.filter((f) => !hideFramework || !isFrameworkFolder(f.folder)) : []
   const isDotnet = (folder: string) => !!found?.some((f) => f.type === 'dotnet' && sameFolder(f.folder, folder))
+
+  function changeHideFramework(hide: boolean) {
+    setHideFramework(hide)
+    try {
+      localStorage.setItem(HIDE_FRAMEWORK_KEY, hide ? 'on' : 'off')
+    } catch {
+      // Not remembered; the switch still works for this session.
+    }
+  }
 
   function toggleFolder(folder: string) {
     setProjects((rows) => {
@@ -309,6 +352,28 @@ export default function App() {
     SetTheme(next).catch(() => {})
   }
 
+  async function checkForUpdate() {
+    setUpdateError('')
+    setCheckingUpdate(true)
+    try {
+      setUpdate(await CheckForUpdate())
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
+
+  // On success the app closes and the new version opens, so there is nothing to do afterwards.
+  async function installUpdate() {
+    setUpdateError('')
+    setInstallingUpdate(true)
+    try {
+      await InstallUpdate()
+    } catch (err) {
+      setUpdateError(String(err))
+      setInstallingUpdate(false)
+    }
+  }
+
   function openSettings() {
     // Free space changes while the app is open; show current numbers.
     GetStorage().then(setStorage)
@@ -321,7 +386,22 @@ export default function App() {
   }
 
   if (view === 'settings' && storage) {
-    return <Settings storage={storage} onChange={setStorage} theme={theme} onThemeChange={changeTheme} onClose={() => setView('form')} />
+    return (
+      <Settings
+        storage={storage}
+        onChange={setStorage}
+        theme={theme}
+        onThemeChange={changeTheme}
+        appInfo={appInfo}
+        update={update}
+        checkingUpdate={checkingUpdate}
+        installingUpdate={installingUpdate}
+        updateError={updateError}
+        onCheckUpdate={checkForUpdate}
+        onInstallUpdate={installUpdate}
+        onClose={() => setView('form')}
+      />
+    )
   }
 
   if (view === 'form' || view === 'settings') {
@@ -368,6 +448,16 @@ export default function App() {
             </div>
           </header>
 
+          {update?.available && (
+            <Notice tone="info">
+              Version {update.version} of SVN Builder is available.{update.notes ? ` ${update.notes}` : ''}{' '}
+              <button type="button" onClick={installUpdate} disabled={installingUpdate} className="font-semibold underline underline-offset-2 disabled:no-underline">
+                {installingUpdate ? 'Updating…' : 'Update now'}
+              </button>
+              {updateError && <span className="mt-1 block text-bad">{updateError}</span>}
+            </Notice>
+          )}
+
           {storage?.warning && (
             <Notice tone="warn">
               {storage.warning}{' '}
@@ -386,6 +476,7 @@ export default function App() {
 
           <Section step={1} title="Source">
             <div className="flex flex-col gap-3">
+              <div className="grid grid-cols-[1fr_6rem] gap-3">
               <Field label="Project address in SVN" htmlFor="repo">
                 <div className="relative">
                   <TextInput
@@ -420,18 +511,46 @@ export default function App() {
                   )}
                 </div>
               </Field>
-              <div className="grid grid-cols-[1fr_1fr_6rem] gap-3">
-                <Field label="SVN user name" htmlFor="user">
-                  <TextInput id="user" value={username} onChange={setUsername} />
-                </Field>
-                <Field label="SVN password" htmlFor="pass">
-                  <PasswordInput id="pass" value={password} onChange={setPassword} />
-                </Field>
                 <Field label="Revision" htmlFor="rev">
                   <TextInput id="rev" value={revision} onChange={setRevision} placeholder="Latest" inputMode="numeric" />
                 </Field>
               </div>
-              <p className="-mt-1 text-[12.5px] text-faint">Passwords are used for this build only and are never saved.</p>
+              <div className="border-t border-line pt-2.5">
+                <button
+                  type="button"
+                  onClick={() => setSignInOpen(!signInOpen)}
+                  aria-expanded={signInOpen}
+                  className="inline-flex items-center gap-1.5 text-[13px] text-muted transition hover:text-ink"
+                >
+                  <span className={'transition-transform ' + (signInOpen ? '' : '-rotate-90')}>
+                    <ChevronDownIcon />
+                  </span>
+                  SVN sign-in
+                  {/* Values that are filled in are still used while this is closed; say so. */}
+                  {!signInOpen &&
+                    (username.trim() || password ? (
+                      <span className="text-accent">· {username.trim() ? `as ${username.trim()}` : 'password entered'}</span>
+                    ) : (
+                      <span className="text-faint">· using the sign-in saved on this PC</span>
+                    ))}
+                </button>
+                {signInOpen && (
+                  <div className="mt-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="SVN user name" htmlFor="user">
+                        <TextInput id="user" value={username} onChange={setUsername} />
+                      </Field>
+                      <Field label="SVN password" htmlFor="pass">
+                        <PasswordInput id="pass" value={password} onChange={setPassword} />
+                      </Field>
+                    </div>
+                    <p className="mt-1.5 text-[12.5px] text-faint">
+                      Leave both empty to use the SVN sign-in saved on this PC. A password typed here is used for this build only and
+                      never saved.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </Section>
 
@@ -463,7 +582,7 @@ export default function App() {
                   className="flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-line bg-field px-3 text-left transition hover:border-line-strong"
                 >
                   <span className="truncate">
-                    Choose from {found.length} folder{found.length === 1 ? '' : 's'} found in SVN
+                    Choose from {listed.length} folder{listed.length === 1 ? '' : 's'} found in SVN
                     {chosenCount > 0 && <span className="text-muted"> · {chosenCount} chosen</span>}
                   </span>
                   <span className="shrink-0 text-faint">
@@ -473,7 +592,7 @@ export default function App() {
                 {picker === 'folders' && (
                   <Picker
                     multi
-                    items={found.map((f) => ({
+                    items={listed.map((f) => ({
                       key: f.folder,
                       label: f.folder === '.' ? 'Top folder' : f.folder,
                       hint: SHORT_KINDS[f.type] ?? f.type,
@@ -482,8 +601,14 @@ export default function App() {
                     onPick={toggleFolder}
                     onClose={closePicker}
                     searchPlaceholder="Search folders"
-                    emptyText="No folders were found."
-                    footer="Click a folder to add or remove it."
+                    emptyText={
+                      frameworkCount > 0 ? 'Only framework folders were found. They can be shown under Advanced options.' : 'No folders were found.'
+                    }
+                    footer={
+                      hideFramework && frameworkCount > 0
+                        ? `Click a folder to add or remove it. ${frameworkCount} framework folder${frameworkCount === 1 ? ' is' : 's are'} hidden; see Advanced options.`
+                        : 'Click a folder to add or remove it.'
+                    }
                   />
                 )}
               </div>
@@ -531,10 +656,30 @@ export default function App() {
                 Add folder
               </button>
             </div>
-            <div className="mt-3 border-t border-line pt-3">
-              <Toggle checked={cleanBuild} onChange={setCleanBuild}>
-                Clean build <span className="text-faint">(download all packages again; slower)</span>
-              </Toggle>
+            <div className="mt-3 border-t border-line pt-2.5">
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen(!advancedOpen)}
+                aria-expanded={advancedOpen}
+                className="inline-flex items-center gap-1.5 text-[13px] text-muted transition hover:text-ink"
+              >
+                <span className={'transition-transform ' + (advancedOpen ? '' : '-rotate-90')}>
+                  <ChevronDownIcon />
+                </span>
+                Advanced options
+                {/* A switch that is on while hidden should not go unnoticed. */}
+                {!advancedOpen && cleanBuild && <span className="text-accent">· clean build is on</span>}
+              </button>
+              {advancedOpen && (
+                <div className="mt-3 flex flex-col gap-3">
+                  <Toggle checked={cleanBuild} onChange={setCleanBuild}>
+                    Clean build <span className="text-faint">(download all packages again; slower)</span>
+                  </Toggle>
+                  <Toggle checked={hideFramework} onChange={changeHideFramework}>
+                    Hide {FRAMEWORK_PREFIX}* framework folders <span className="text-faint">(in the list of folders found in SVN)</span>
+                  </Toggle>
+                </div>
+              )}
             </div>
           </Section>
 
@@ -716,7 +861,15 @@ export default function App() {
       </Body>
 
       <Footer>
-        <button type="button" onClick={() => setView('form')} className={primaryButton + ' w-full'}>
+        <button
+          type="button"
+          onClick={() => {
+            // A build stopped by SVN asking for a sign-in returns to the form with those boxes open.
+            if (needsSvnSignIn(outcome.message)) setSignInOpen(true)
+            setView('form')
+          }}
+          className={primaryButton + ' w-full'}
+        >
           {failed ? 'Back to try again' : 'Back'}
         </button>
       </Footer>

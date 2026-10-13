@@ -6,6 +6,10 @@ export function CancelBuild() {
   return window['go']['main']['App']['CancelBuild']();
 }
 
+export function CheckForUpdate() {
+  return window['go']['main']['App']['CheckForUpdate']();
+}
+
 export function CheckTools() {
   return window['go']['main']['App']['CheckTools']();
 }
@@ -26,8 +30,16 @@ export function ForgetRepository(arg1) {
   return window['go']['main']['App']['ForgetRepository'](arg1);
 }
 
+export function GetAppInfo() {
+  return window['go']['main']['App']['GetAppInfo']();
+}
+
 export function GetStorage() {
   return window['go']['main']['App']['GetStorage']();
+}
+
+export function InstallUpdate() {
+  return window['go']['main']['App']['InstallUpdate']();
 }
 
 export function LoadSettings() {

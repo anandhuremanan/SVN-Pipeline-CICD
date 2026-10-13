@@ -4,6 +4,8 @@ import {main} from '../models';
 
 export function CancelBuild():Promise<void>;
 
+export function CheckForUpdate():Promise<main.UpdateInfo>;
+
 export function CheckTools():Promise<Array<main.ToolStatus>>;
 
 export function ChooseFolder(arg1:string,arg2:string):Promise<string>;
@@ -14,7 +16,11 @@ export function FetchFolders(arg1:main.BuildRequest):Promise<Array<main.RemoteFo
 
 export function ForgetRepository(arg1:string):Promise<Array<string>>;
 
+export function GetAppInfo():Promise<main.AppInfo>;
+
 export function GetStorage():Promise<main.StorageInfo>;
+
+export function InstallUpdate():Promise<void>;
 
 export function LoadSettings():Promise<main.Settings>;
 

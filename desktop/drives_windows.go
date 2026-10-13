@@ -17,6 +17,22 @@ var (
 	procGetDiskFreeSpaceExW = kernel32.NewProc("GetDiskFreeSpaceExW")
 )
 
+const (
+	processSynchronize = 0x00100000
+	waitTimeoutMillis  = 15000
+)
+
+// waitForProcessExit waits, for at most fifteen seconds, until the process with this id has ended.
+func waitForProcessExit(pid int) {
+	handle, err := syscall.OpenProcess(processSynchronize, false, uint32(pid))
+	if err != nil {
+		// Already gone, or not ours to wait for.
+		return
+	}
+	defer syscall.CloseHandle(handle)
+	_, _ = syscall.WaitForSingleObject(handle, waitTimeoutMillis)
+}
+
 // fixedDriveRoots lists the roots of the PC's internal drives, e.g. "C:\", "D:\".
 func fixedDriveRoots() []string {
 	mask, _, _ := procGetLogicalDrives.Call()

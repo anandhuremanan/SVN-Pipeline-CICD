@@ -394,7 +394,9 @@ If the save folder is a network folder (`\\SERVER\Builds`) that needs a differen
 
 The last SVN address, user names and folders are remembered in `%APPDATA%\SvnBuilder\settings.json`. Passwords are never stored.
 
-The arrow in the address box opens a searchable list of the SVN addresses used on this PC (up to 20, most recent first; the × forgets one). The app does not ask the server for its repositories: that needs `SVNListParentPath On` on an Apache SVN server, and many servers have it off. After **Find folders in SVN**, the buildable folders are chosen from a searchable drop-down in the same style.
+The SVN user name and password sit under **SVN sign-in**, closed by default. Left empty, the app uses the SVN sign-in already saved on the PC (the one TortoiseSVN and the `svn` command share), which is enough on most machines. The section opens by itself when the server asks for a sign-in.
+
+The arrow in the address box opens a searchable list of the SVN addresses used on this PC (up to 20, most recent first; the × forgets one). The app does not ask the server for its repositories: that needs `SVNListParentPath On` on an Apache SVN server, and many servers have it off. After **Find folders in SVN**, the buildable folders are chosen from a searchable drop-down in the same style. Folders whose name starts with `GRAMPRO.` (the shared framework projects) are left out of that list; the **Hide GRAMPRO.\* framework folders** switch under **Advanced options** (below the folder rows, closed by default) shows them again, and its setting is remembered. **Clean build** is under Advanced options too.
 
 **Settings** (the gear at the top right) has an **Appearance** switch (Same as Windows, Light, Dark) that is remembered between sessions, and a **Working drive** choice for PCs whose system drive is short on space. It lists the internal drives with their free space; choosing one moves downloads and builds to `<drive>:\SvnBuilder\workspaces` and the build history and logs to `<drive>:\SvnBuilder`. "Automatic" keeps the defaults (`%TEMP%\SvnBuilder` and `%APPDATA%\SvnBuilder`). The main screen shows a warning when the working drive has under 2 GB free, and a build is not started with under 500 MB free. If the settings file cannot be written to `%APPDATA%` (for example because that drive is full), it is saved as `svn-builder-settings.json` next to the executable.
 
@@ -403,6 +405,26 @@ The app keeps each website project's installed packages (`node_modules`) on the 
 When a network save folder needs its own sign-in and Windows already holds a connection to that share under another account (for example after opening it in File Explorer), the app drops that connection and signs in with the account entered. Mapped drives and connections to other shares on the same server are left alone.
 
 The result screen appears as soon as the output is saved; the temporary download (which can hold tens of thousands of dependency files) is deleted in the background afterwards. Temporary downloads left behind by a crash or a forced close are deleted the next time the app starts. Only one copy of the app runs at a time; starting it again brings the open window forward.
+
+### Versions and updates
+
+A release has a version number, shown in **Settings → About**, and knows the folder its updates are published to. When it starts it looks in that folder; if a newer version is there, a notice with **Update now** appears on the main screen and in About. Updating downloads the new file next to the current one, checks it, swaps it in and restarts the app. No installer and no administrator rights are needed, as long as the user can write to the folder the app sits in.
+
+Publishing a release is one command, run from the repository:
+
+```powershell
+# Once per publisher: creates the signing key and builds its public half into the app
+go run ./cmd/release keygen
+
+# Every release
+go run ./cmd/release -version 1.2.0 -to \\SERVER\Share\SvnBuilder -notes "What changed"
+```
+
+It builds the app with the version and release folder baked in, signs it, and copies `svn-builder.exe` and `latest.json` to the folder. People install the app the first time by copying `svn-builder.exe` out of that folder; after that it updates itself. A version number can only go up.
+
+Releases are signed. The private key is saved as `svn-builder-release.key` in the publisher's user folder, outside the repository; the app carries the public key (`desktop/update_key.go`). An installed copy ignores a manifest that is not signed with that key and refuses a file that does not match the signed checksum, so write access to the release folder is not enough to push software to users. Keep a backup of the key file: without it, new releases are not accepted by copies already installed, and they would have to be replaced by hand.
+
+A plain `wails build` produces a development build (version `dev`), which never looks for updates.
 
 The window has a fixed size (580 × 800) and cannot be resized or maximized; on a shorter screen it shrinks to fit and the form scrolls.
 

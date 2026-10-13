@@ -2,6 +2,8 @@
 
 package main
 
+func waitForProcessExit(pid int) {}
+
 func fixedDriveRoots() []string {
 	return nil
 }

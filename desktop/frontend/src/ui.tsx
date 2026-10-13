@@ -248,8 +248,14 @@ export function Toggle(props: { checked: boolean; onChange: (checked: boolean) =
   )
 }
 
-export function Notice(props: { tone: 'bad' | 'warn'; children: ReactNode }) {
-  const tone = props.tone === 'bad' ? 'bg-bad-soft text-bad' : 'bg-warn-soft text-warn'
+const noticeTones = {
+  bad: 'bg-bad-soft text-bad',
+  warn: 'bg-warn-soft text-warn',
+  info: 'bg-accent-soft text-accent',
+}
+
+export function Notice(props: { tone: keyof typeof noticeTones; children: ReactNode }) {
+  const tone = noticeTones[props.tone]
   return (
     <div role="alert" className={'flex items-start gap-2.5 rounded-lg px-3 py-2.5 text-[13px] ' + tone}>
       <span className="mt-px shrink-0">

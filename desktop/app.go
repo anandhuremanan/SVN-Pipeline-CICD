@@ -740,7 +740,8 @@ func friendlyFailure(details, stage string, failedProjects []string) string {
 		return "Subversion (SVN) is not installed on this PC. Ask IT to install the SVN command-line tools."
 	case strings.Contains(lower, "e170001") || strings.Contains(lower, "e215004") ||
 		strings.Contains(lower, "authentication failed") || strings.Contains(lower, "authorization failed"):
-		return "SVN did not accept the user name or password. Check them and try again."
+		// The UI opens its sign-in boxes when it sees "SVN user name" (needsSvnSignIn in App.tsx).
+		return "SVN needs a sign-in for this address, or did not accept the one given. Enter your SVN user name and password, then try again."
 	case strings.Contains(lower, "e170013") || strings.Contains(lower, "e731001") || strings.Contains(lower, "e670002") ||
 		strings.Contains(lower, "unable to connect"):
 		return "The SVN server can't be reached. Check the address and your network or VPN connection."

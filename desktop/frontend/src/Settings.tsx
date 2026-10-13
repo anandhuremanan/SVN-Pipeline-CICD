@@ -40,6 +40,13 @@ export function Settings(props: {
   onChange: (storage: main.StorageInfo) => void
   theme: Theme
   onThemeChange: (theme: Theme) => void
+  appInfo: main.AppInfo | null
+  update: main.UpdateInfo | null
+  checkingUpdate: boolean
+  installingUpdate: boolean
+  updateError: string
+  onCheckUpdate: () => void
+  onInstallUpdate: () => void
   onClose: () => void
 }) {
   const { storage } = props
@@ -239,7 +246,30 @@ export function Settings(props: {
           <h2 id="about" className="text-[14px] font-semibold">
             About
           </h2>
-          <p className="mt-1 text-muted">Made by Joseph and Team at Grampro Research and Development - 2026</p>
+          <div className="mt-1 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="font-medium">SVN Builder {versionLabel(props.appInfo)}</div>
+              <div className="text-muted">{updateStatus(props)}</div>
+            </div>
+            {props.appInfo?.updateSource &&
+              (props.update?.available ? (
+                <button type="button" onClick={props.onInstallUpdate} disabled={props.installingUpdate} className={fieldButton + ' disabled:cursor-not-allowed disabled:opacity-40'}>
+                  {props.installingUpdate && <Spinner size={12} />}
+                  Update now
+                </button>
+              ) : (
+                <button type="button" onClick={props.onCheckUpdate} disabled={props.checkingUpdate} className={fieldButton + ' disabled:cursor-not-allowed disabled:opacity-40'}>
+                  {props.checkingUpdate && <Spinner size={12} />}
+                  Check for updates
+                </button>
+              ))}
+          </div>
+          {props.updateError && (
+            <div className="mt-2">
+              <Notice tone="bad">{props.updateError}</Notice>
+            </div>
+          )}
+          <p className="mt-3 border-t border-line pt-3 text-muted">Made by Joseph and Team at Grampro Research and Development - 2026</p>
           <p className="mt-2 flex flex-wrap items-center gap-x-1.5 text-muted">
             Contact
             <button type="button" onClick={() => BrowserOpenURL(`mailto:${CONTACT_EMAIL}`)} className="selectable font-medium text-accent transition hover:text-accent-hover hover:underline">
@@ -309,6 +339,20 @@ function Option(props: {
       </span>
     </button>
   )
+}
+
+function versionLabel(info: main.AppInfo | null) {
+  if (!info) return ''
+  return info.version === 'dev' ? '(development build)' : info.version
+}
+
+function updateStatus(props: { appInfo: main.AppInfo | null; update: main.UpdateInfo | null; checkingUpdate: boolean; installingUpdate: boolean }) {
+  if (props.installingUpdate) return 'Installing the new version. The app will restart.'
+  if (props.checkingUpdate) return 'Looking for a newer version.'
+  if (!props.appInfo?.updateSource) return 'This build is updated by hand.'
+  if (!props.update) return ''
+  if (props.update.available) return `Version ${props.update.version} is available.${props.update.notes ? ' ' + props.update.notes : ''}`
+  return props.update.problem || 'You have the latest version.'
 }
 
 function ThemeIcon(props: { theme: Theme }) {
